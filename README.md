@@ -3,6 +3,8 @@
 arXiv 의 **특정 카테고리 + 특정 주제**만 검색해서, 각 논문의 **한국어 리뷰**를 만들고
 검색 가능한 HTML 한 장으로 보여 주는 도구입니다.
 
+![arxiv-review 개요: 기간·주제 요청에서 전문 기반 한국어 요약까지](overview.png)
+
 리뷰는 Anthropic API 키가 아니라 **Claude Code CLI(`claude`)** 로 만듭니다.
 `claude` 에 **Claude Pro 구독 계정**으로 로그인해 두면 사용량이 구독 한도에서 차감되고
 API 요금은 나가지 않습니다.

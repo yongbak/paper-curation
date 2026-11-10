@@ -438,6 +438,88 @@ class CliTests(unittest.TestCase):
         finally:
             arxiv.search_detailed, reviewer.review_paper = saved
 
+    def test_skill_search_fulltext_save_flow(self):
+        """skill 경로: search → fulltext → save. claude 호출 없이 같은 결과 파일이 나온다."""
+        import contextlib
+        import io
+        from arxiv_review import fulltext, service
+        saved = (arxiv.search_detailed, fulltext.fetch_fulltext, fulltext.pymupdf_available)
+        arxiv.search_detailed = lambda t, **kw: arxiv.SearchResult(
+            arxiv.parse_feed(FEED)[:1], dt.date(2026, 11, 1), dt.date(2026, 11, 5), True)
+        body = "본문 첫 줄\n" + "실험 결과 " * 400
+        seen = []
+        fulltext.fetch_fulltext = lambda paper, max_chars: seen.append(max_chars) or FullText(
+            text=body, total_chars=len(body))
+        fulltext.pymupdf_available = lambda: True
+
+        def run(*argv):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+                code = cli.main(["--config", str(cfg), *argv])
+            return code, out.getvalue()
+
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                cfg = Path(d) / "config.json"
+                cfg.write_text(json.dumps({"output_dir": "out"}))
+                out_dir = Path(d) / "out"
+                # 검색 전에는 fulltext/save 가 그 ID 를 받지 않는다
+                self.assertEqual(run("fulltext", "2611.01234", "--topic", "rag")[0], 2)
+                self.assertEqual(run("fulltext", "../etc", "--topic", "rag")[0], 2)
+
+                code, out = run("search", "--topic", "rag", "--category", "cs.CL",
+                                "--keyword", "RAG", "--from", "2026-11-01", "--to", "2026-11-05")
+                found = json.loads(out)
+                self.assertEqual(code, 0)
+                self.assertEqual((found["topic"], found["since"], found["more_available"]),
+                                 ("rag", "2026-11-01", True))
+                paper = found["papers"][0]
+                self.assertEqual((paper["arxiv_id"], paper["reviewed"]), ("2611.01234", False))
+                self.assertTrue(paper["abstract"] and paper["authors"])
+
+                code, out = run("fulltext", "2611.01234", "--topic", "rag")
+                info = json.loads(out)
+                self.assertEqual((code, info["chars"], info["lines"]), (0, len(body), 2))
+                self.assertEqual(seen, [None])  # 자르지 않고 전체를 받는다
+                self.assertEqual(Path(info["path"]).read_text(encoding="utf-8"), body)
+
+                draft = Path(info["path"]).parent / "review.draft.json"
+                save = ["save", "2611.01234", "--topic", "rag", "--review", str(draft)]
+                draft.write_text(json.dumps({**REVIEW, "experiments": ""}), encoding="utf-8")
+                self.assertEqual(run(*save, "--basis", "fulltext")[0], 2)  # 빈 필드 거부
+                self.assertIsNone(service.load_entry(out_dir, "rag", "2611.01234"))
+                draft.write_text(json.dumps(REVIEW, ensure_ascii=False), encoding="utf-8")
+                self.assertEqual(run(*save, "--basis", "abstract", "--read-chars", "5")[0], 2)
+                self.assertEqual(run(*save, "--basis", "fulltext",
+                                     "--read-chars", str(len(body) + 1))[0], 2)
+                code, out = run(*save, "--basis", "fulltext")
+                self.assertEqual(code, 0)
+                entry = service.load_entry(out_dir, "rag", "2611.01234")
+                self.assertEqual(entry["meta"]["basis"], "fulltext")
+                self.assertEqual(entry["meta"]["fulltext_chars"], len(body))
+                self.assertEqual(entry["paper"]["title"], paper["title"])
+                md = Path(json.loads(out)["saved"]).read_text(encoding="utf-8")
+                self.assertIn("본문 전체", md)
+                self.assertIn("## Abstract", md)
+                page = (out_dir / "rag" / "index.html").read_text(encoding="utf-8")
+                self.assertIn("<h3>Abstract</h3>", page)
+                self.assertIn("주제 RAG", page)  # 등록 안 한 주제도 검색 조건이 남는다
+
+                self.assertEqual(run(*save, "--basis", "fulltext")[0], 2)  # 이미 있음
+                self.assertEqual(run(*save, "--basis", "fulltext", "--force",
+                                     "--read-chars", "100")[0], 0)
+                partial = service.load_entry(out_dir, "rag", "2611.01234")["meta"]
+                self.assertEqual((partial["fulltext_chars"], partial["fulltext_total_chars"]),
+                                 (100, len(body)))
+                self.assertTrue(json.loads(run(
+                    "search", "--topic", "rag", "--category", "cs.CL")[1])["papers"][0]["reviewed"])
+
+                fulltext.pymupdf_available = lambda: False
+                code, out = run("fulltext", "2611.01234", "--topic", "rag")
+                self.assertEqual((code, json.loads(out)["path"]), (0, None))
+        finally:
+            arxiv.search_detailed, fulltext.fetch_fulltext, fulltext.pymupdf_available = saved
+
     def test_example_config_is_valid(self):
         config = load_config(Path(__file__).parent.parent / "config.example.json")
         self.assertIn("llm-agents", config.topics)

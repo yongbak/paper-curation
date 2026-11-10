@@ -8,11 +8,18 @@
     python -m arxiv_review run --topic 내토픽            # 검색 + 리뷰 + index.html
     python -m arxiv_review build --topic 내토픽          # HTML 만 다시
     python -m arxiv_review serve                        # 웹 UI: http://localhost:7777
+
+Claude Code skill(.claude/skills/arxiv-review) 이 쓰는 단계별 명령 — 리뷰는 에이전트가 쓴다:
+    python -m arxiv_review search --topic 이름 --category cs.CL --keyword "RAG" \
+        --from 2026-11-01 --to 2026-11-09               # 검색 결과 JSON
+    python -m arxiv_review fulltext 2611.01234 --topic 이름   # 본문 전체 → fulltext.txt
+    python -m arxiv_review save 2611.01234 --topic 이름 --review draft.json --basis fulltext
 """
 from __future__ import annotations
 
 import argparse
 import datetime as dt
+import json
 import sys
 from pathlib import Path
 
@@ -129,12 +136,121 @@ def cmd_run(args, config: Config) -> int:
     return 1 if failed else 0
 
 
+def _print_json(data) -> None:
+    print(json.dumps(data, ensure_ascii=False, indent=2))
+
+
+def _topic_name(name: str) -> str:
+    return Topic(name=name, categories=["cs.AI"]).validate().name  # 이름 형식만 검사
+
+
+def _searched(config: Config, topic_name: str, arxiv_id: str) -> dict:
+    try:
+        paper = service.searched_paper(config.output_dir, topic_name, arxiv_id)
+    except ValueError as e:  # arXiv ID 형식이 아님
+        raise ConfigError(str(e)) from e
+    if paper is None:
+        raise ConfigError(
+            f"{arxiv_id} 는 주제 {topic_name!r} 의 검색 결과에 없습니다. "
+            "먼저 `python -m arxiv_review search --topic ...` 로 검색하세요.")
+    return paper
+
+
+def cmd_search(args, config: Config) -> int:
+    """검색 결과를 JSON 으로 출력하고, fulltext/save 가 쓸 수 있게 기억해 둔다."""
+    topic = resolve_topic(args, config)
+    since, until = parse_date(args.date_from), parse_date(args.date_to)
+    try:
+        result = arxiv.search_detailed(topic, since=since, until=until)
+    except ValueError as e:
+        raise ConfigError(str(e)) from e
+    service.remember_search(config.output_dir, topic.name, result.papers, describe(topic))
+    keys = ("arxiv_id", "title", "authors", "abstract", "published",
+            "primary_category", "categories", "abs_url")
+    _print_json({
+        "topic": topic.name,
+        "query": describe(topic),
+        "since": str(result.since), "until": str(result.until),
+        "max_papers": topic.max_papers,
+        "more_available": result.more_available,
+        "oldest_included": result.oldest,
+        "papers": [
+            {**{k: p[k] for k in keys},
+             "reviewed": bool(service.load_entry(config.output_dir, topic.name, p["arxiv_id"]))}
+            for p in result.papers],
+    })
+    return 0
+
+
+def cmd_fulltext(args, config: Config) -> int:
+    """논문 본문 전체(참고문헌 제외)를 파일로 쓰고 경로를 JSON 으로 알려 준다."""
+    name = _topic_name(args.topic)
+    paper = _searched(config, name, args.arxiv_id)
+    if not fulltext.pymupdf_available():
+        _print_json({"arxiv_id": args.arxiv_id, "path": None,
+                     "reason": "PyMuPDF 미설치 (pip install pymupdf)"})
+        return 0
+    path = service.save_fulltext(paper, name, config.output_dir)
+    if path is None:
+        _print_json({"arxiv_id": args.arxiv_id, "path": None,
+                     "reason": "PDF 를 받지 못했거나 텍스트를 추출할 수 없습니다"})
+        return 0
+    text = path.read_text(encoding="utf-8")
+    _print_json({"arxiv_id": args.arxiv_id, "path": str(path),
+                 "chars": len(text), "lines": text.count("\n") + 1})
+    return 0
+
+
+def cmd_save(args, config: Config) -> int:
+    """에이전트가 쓴 리뷰 JSON 을 검증해 review.md + paper.json 으로 저장한다."""
+    name = _topic_name(args.topic)
+    paper = _searched(config, name, args.arxiv_id)
+    if not args.force and service.load_entry(config.output_dir, name, args.arxiv_id):
+        raise ConfigError(f"{args.arxiv_id} 는 이미 리뷰가 저장돼 있습니다. 다시 쓰려면 --force")
+    try:
+        draft = json.loads(Path(args.review).read_text(encoding="utf-8"))
+    except OSError as e:
+        raise ConfigError(f"리뷰 파일을 읽을 수 없습니다: {e}") from e
+    except json.JSONDecodeError as e:
+        raise ConfigError(f"{args.review}: JSON 오류 — {e}") from e
+    try:
+        review = reviewer.validate_review(draft)
+    except reviewer.ReviewError as e:
+        raise ConfigError(f"리뷰 형식 오류 — {e}") from e
+
+    read = total = None
+    if args.basis == "fulltext":
+        body = service.fulltext_path(config.output_dir, name, args.arxiv_id)
+        if not body.exists():
+            raise ConfigError(
+                f"본문 파일이 없습니다: {body}\n  `fulltext {args.arxiv_id} --topic {name}` 을 "
+                "먼저 실행하거나, 초록만 읽었다면 --basis abstract 로 저장하세요.")
+        total = len(body.read_text(encoding="utf-8"))
+        read = total if args.read_chars is None else args.read_chars
+        if not 0 < read <= total:
+            raise ConfigError(f"--read-chars 는 1 ~ {total} 이어야 합니다")
+    elif args.read_chars is not None:
+        raise ConfigError("--read-chars 는 --basis fulltext 와 함께 씁니다")
+
+    service.save_review(paper, review, name, config.output_dir, model=args.model,
+                        fulltext_chars=read, fulltext_total_chars=total)
+    index = service.rebuild_index(
+        config.output_dir, name,
+        describe(config.topics[name]) if name in config.topics
+        else service.saved_description(config.output_dir, name))
+    record = service.entry_path(config.output_dir, name, args.arxiv_id)
+    _print_json({"arxiv_id": args.arxiv_id, "saved": str(record.parent / "review.md"),
+                 "index": str(index)})
+    return 0
+
+
 def cmd_build(args, config: Config) -> int:
     name = args.topic
     topic_dir = config.output_dir / name
     if not topic_dir.is_dir():
         raise ConfigError(f"리뷰 결과가 없습니다: {topic_dir}")
-    description = describe(config.topics[name]) if name in config.topics else ""
+    description = (describe(config.topics[name]) if name in config.topics
+                   else service.saved_description(config.output_dir, name))
     print(f"결과: {render.build_index(topic_dir, name, description)}")
     return 0
 
@@ -245,6 +361,32 @@ def main(argv=None) -> int:
     run.add_argument("--skip-login-check", action="store_true",
                      help="리뷰 전 구독 로그인 확인을 건너뜀")
     run.set_defaults(func=cmd_run)
+
+    # ── Claude Code skill 용 단계별 명령 (리뷰는 에이전트가 쓰고, 여기서는 검증·저장만) ──
+    search = sub.add_parser("search", help="검색 결과를 JSON 으로 출력 (리뷰 없음)")
+    search.add_argument("--topic", help="주제 이름. 등록돼 있지 않으면 --category 와 함께 준다")
+    _add_filter_args(search, topic_cmd=False)
+    search.add_argument("--from", dest="date_from", metavar="YYYY-MM-DD", help="검색 시작일")
+    search.add_argument("--to", dest="date_to", metavar="YYYY-MM-DD", help="검색 종료일 (기본 오늘)")
+    search.set_defaults(func=cmd_search)
+
+    ft = sub.add_parser("fulltext", help="논문 본문 전체를 fulltext.txt 로 저장")
+    ft.add_argument("arxiv_id")
+    ft.add_argument("--topic", required=True)
+    ft.set_defaults(func=cmd_fulltext)
+
+    save = sub.add_parser("save", help="작성된 리뷰 JSON 을 검증해 저장하고 index.html 갱신")
+    save.add_argument("arxiv_id")
+    save.add_argument("--topic", required=True)
+    save.add_argument("--review", required=True, metavar="FILE", help="리뷰 JSON 파일")
+    save.add_argument("--basis", required=True, choices=["fulltext", "abstract"],
+                      help="무엇을 읽고 썼는지")
+    save.add_argument("--read-chars", type=int, metavar="N",
+                      help="본문을 끝까지 읽지 못했을 때 실제로 읽은 글자 수")
+    save.add_argument("--model", default="claude-code",
+                      help="리뷰를 쓴 모델 표시 (기본 claude-code)")
+    save.add_argument("--force", action="store_true", help="이미 저장된 리뷰를 덮어씀")
+    save.set_defaults(func=cmd_save)
 
     build = sub.add_parser("build", help="저장된 리뷰로 index.html 만 다시 생성")
     build.add_argument("--topic", required=True)

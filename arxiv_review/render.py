@@ -61,6 +61,8 @@ def review_markdown(paper: dict, review: dict, meta: dict) -> str:
         f"> **리뷰 근거**: {basis_label(meta)}",
         "",
     ]
+    if paper.get("abstract"):
+        lines += ["## Abstract", "", paper["abstract"], ""]
     for key, label in SECTIONS:
         if review.get(key):
             lines += [f"## {label}", "", review[key], ""]
@@ -183,7 +185,8 @@ def _article(entry: dict) -> str:
         f'<a href="{e(p["pdf_url"], quote=True)}" target="_blank" rel="noopener">PDF</a> · '
         f'<a href="{e(paper_dirname(p["arxiv_id"]), quote=True)}/review.md">review.md</a></div>\n'
         f'<div class="essence">{md_to_html(r["essence"])}</div>\n'
-        f'<details><summary>리뷰 전체 보기</summary>\n{body}'
+        f'<details><summary>리뷰 전체 보기</summary>\n'
+        f'<h3>Abstract</h3>\n<p>{e(p["abstract"])}</p>\n{body}'
         f'<h3>총평</h3>\n{md_to_html(r["verdict"])}\n'
         f'<div class="scores">{scores}</div></details>\n</article>'
     )

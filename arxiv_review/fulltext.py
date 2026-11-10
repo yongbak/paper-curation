@@ -46,7 +46,8 @@ def strip_references(text: str) -> str:
     return text
 
 
-def extract(pdf_bytes: bytes, max_chars: int) -> FullText | None:
+def extract(pdf_bytes: bytes, max_chars: int | None) -> FullText | None:
+    """max_chars=None 이면 자르지 않는다."""
     fitz = _pymupdf()
     if fitz is None:
         return None
@@ -58,7 +59,7 @@ def extract(pdf_bytes: bytes, max_chars: int) -> FullText | None:
     return FullText(text=text[:max_chars], total_chars=len(text))
 
 
-def fetch_fulltext(paper: dict, max_chars: int) -> FullText | None:
+def fetch_fulltext(paper: dict, max_chars: int | None) -> FullText | None:
     if not pymupdf_available():
         return None
     try:

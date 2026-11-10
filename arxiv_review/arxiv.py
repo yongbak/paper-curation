@@ -7,11 +7,13 @@ from __future__ import annotations
 import datetime as dt
 import re
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 
 from .config import Topic
 
@@ -20,6 +22,8 @@ USER_AGENT = "arxiv-review/1.0 (personal paper curation script)"
 PAGE_SIZE = 100
 REQUEST_INTERVAL = 3.0
 ATOM = "{http://www.w3.org/2005/Atom}"
+# 2611.01234 (신형) / hep-th/9901001, math.AG/0101001 (구형)
+ARXIV_ID_RE = re.compile(r"^(\d{4}\.\d{4,5}|[a-z\-]+(\.[A-Z]{2})?/\d{7})$")
 ARXIV = "{http://arxiv.org/schemas/atom}"
 
 
@@ -87,9 +91,25 @@ def apply_filters(papers: list[dict], topic: Topic) -> list[dict]:
     return kept
 
 
+_throttle_lock = threading.Lock()
+_last_request = 0.0
+
+
+def throttle() -> None:
+    """arXiv 로 가는 모든 요청(검색·PDF)을 프로세스 전체에서 3초 간격으로 묶는다.
+    웹 서버에서는 검색과 리뷰 작업이 동시에 돌기 때문에 호출부마다 sleep 하면 안 된다."""
+    global _last_request
+    with _throttle_lock:
+        wait = _last_request + REQUEST_INTERVAL - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        _last_request = time.monotonic()
+
+
 def _fetch(url: str, retries: int = 3) -> bytes:
     for attempt in range(retries):
         try:
+            throttle()
             req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
             with urllib.request.urlopen(req, timeout=60) as resp:
                 return resp.read()
@@ -102,13 +122,36 @@ def _fetch(url: str, retries: int = 3) -> bytes:
     raise AssertionError("unreachable")
 
 
-def search(topic: Topic, *, days: int | None = None, today: dt.date | None = None,
-           limit: int | None = None, fetch=_fetch, sleep=time.sleep) -> list[dict]:
-    """최신 제출순으로 조건에 맞는 논문을 limit 편까지 모은다."""
+@dataclass
+class SearchResult:
+    papers: list[dict]
+    since: dt.date
+    until: dt.date
+    more_available: bool   # max_papers 때문에 기간 안의 논문이 잘렸다
+
+    @property
+    def oldest(self) -> str:
+        return self.papers[-1]["published"] if self.papers else ""
+
+
+def date_window(topic: Topic, *, since: dt.date | None = None,
+                until: dt.date | None = None, today: dt.date | None = None):
+    """since/until 을 직접 주면 그대로, 아니면 '오늘에서 topic.days 일 전 ~ 오늘'."""
     today = today or dt.datetime.now(dt.timezone.utc).date()
-    since = today - dt.timedelta(days=days or topic.days)
+    until = until or today
+    since = since or (until - dt.timedelta(days=topic.days))
+    if since > until:
+        raise ValueError(f"시작일({since})이 종료일({until})보다 늦습니다")
+    return since, until
+
+
+def search_detailed(topic: Topic, *, since: dt.date | None = None,
+                    until: dt.date | None = None, today: dt.date | None = None,
+                    limit: int | None = None, fetch=_fetch) -> SearchResult:
+    """최신 제출순으로 조건에 맞는 논문을 limit 편까지 모은다."""
+    since, until = date_window(topic, since=since, until=until, today=today)
     limit = limit or topic.max_papers
-    query = build_query(topic, since, today)
+    query = build_query(topic, since, until)
     collected: list[dict] = []
     start = 0
     while True:
@@ -117,8 +160,13 @@ def search(topic: Topic, *, days: int | None = None, today: dt.date | None = Non
             "sortBy": "submittedDate", "sortOrder": "descending"})
         page = parse_feed(fetch(url))
         collected = apply_filters(collected + page, topic)
-        if len(collected) >= limit or len(page) < PAGE_SIZE:
+        # limit 보다 1편 더 모아야 '잘렸는지' 알 수 있다
+        if len(collected) > limit or len(page) < PAGE_SIZE:
             break
         start += PAGE_SIZE
-        sleep(REQUEST_INTERVAL)
-    return collected[:limit]
+    return SearchResult(papers=collected[:limit], since=since, until=until,
+                        more_available=len(collected) > limit)
+
+
+def search(topic: Topic, **kw) -> list[dict]:
+    return search_detailed(topic, **kw).papers

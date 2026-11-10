@@ -6,6 +6,8 @@ import json
 import re
 from pathlib import Path
 
+from .arxiv import ARXIV_ID_RE
+
 SECTIONS = [
     ("essence", "Essence"),
     ("known", "알려진 것"),
@@ -14,6 +16,7 @@ SECTIONS = [
     ("approach", "접근법"),
     ("achievement", "성과"),
     ("how", "방법론"),
+    ("experiments", "실험 결과"),
     ("originality", "독창성"),
     ("limitation", "한계와 후속 연구"),
 ]
@@ -23,6 +26,9 @@ SCORES = [("novelty", "Novelty"), ("technical", "Technical soundness"),
 
 
 def paper_dirname(arxiv_id: str) -> str:
+    # 웹 요청에서도 들어오는 값이다 — '..' 같은 경로가 디렉터리 이름이 되면 안 된다.
+    if not ARXIV_ID_RE.match(arxiv_id):
+        raise ValueError(f"arXiv ID 형식이 아닙니다: {arxiv_id!r}")
     return arxiv_id.replace("/", "_")
 
 
@@ -56,7 +62,8 @@ def review_markdown(paper: dict, review: dict, meta: dict) -> str:
         "",
     ]
     for key, label in SECTIONS:
-        lines += [f"## {label}", "", review[key], ""]
+        if review.get(key):
+            lines += [f"## {label}", "", review[key], ""]
     lines += ["## 평가", "", "| 항목 | 점수 |", "|---|---|"]
     lines += [f"| {label} | {review[key]}/5 |" for key, label in SCORES]
     lines += ["", f"**총평**: {review['verdict']}", ""]
@@ -161,9 +168,9 @@ def _article(entry: dict) -> str:
     basis = ("본문 일부" if m.get("fulltext_chars", 0) < m.get("fulltext_total_chars", 0)
              else "본문") if m.get("basis") == "fulltext" else "초록"
     search_text = " ".join([p["title"], " ".join(p["authors"]), p["abstract"],
-                            *(r[k] for k, _ in SECTIONS), r["verdict"]]).lower()
+                            *(r.get(k, "") for k, _ in SECTIONS), r["verdict"]]).lower()
     body = "".join(f"<h3>{e(label)}</h3>\n{md_to_html(r[key])}\n"
-                   for key, label in SECTIONS[1:])
+                   for key, label in SECTIONS[1:] if r.get(key))
     scores = " · ".join(f"{e(label)} {r[key]}/5" for key, label in SCORES)
     return (
         f'<article data-text="{e(search_text, quote=True)}">\n'

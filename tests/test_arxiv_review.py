@@ -2,6 +2,7 @@ import datetime as dt
 import json
 import subprocess
 import tempfile
+import time
 import unittest
 import urllib.parse
 from pathlib import Path
@@ -73,14 +74,39 @@ class FeedTests(unittest.TestCase):
             urls.append(url)
             return FEED
 
-        got = arxiv.search(topic(max_papers=1, days=7), today=dt.date(2026, 11, 10),
-                           fetch=fetch, sleep=lambda s: None)
+        result = arxiv.search_detailed(topic(max_papers=1, days=7),
+                                       today=dt.date(2026, 11, 10), fetch=fetch)
+        got = result.papers
         self.assertEqual(len(got), 1)
+        self.assertTrue(result.more_available)  # 2편이 맞는데 1편만 가져왔다
+        self.assertEqual(result.oldest, "2026-11-05")
         params = urllib.parse.parse_qs(urllib.parse.urlparse(urls[0]).query)
         self.assertIn("submittedDate:[202611030000 TO 202611102359]",
                       params["search_query"][0])
         self.assertEqual(params["sortBy"], ["submittedDate"])
         self.assertEqual(len(urls), 1)  # 한 페이지가 꽉 차지 않으면 더 요청하지 않는다
+
+
+    def test_explicit_date_range(self):
+        urls = []
+        result = arxiv.search_detailed(
+            topic(), since=dt.date(2026, 11, 1), until=dt.date(2026, 11, 5),
+            fetch=lambda u: urls.append(u) or FEED)
+        self.assertIn("submittedDate:[202611010000 TO 202611052359]",
+                      urllib.parse.unquote_plus(urls[0]))
+        self.assertFalse(result.more_available)
+        with self.assertRaises(ValueError):
+            arxiv.date_window(topic(), since=dt.date(2026, 11, 5), until=dt.date(2026, 11, 1))
+        # until 만 주면 그날로부터 days 일 전
+        self.assertEqual(arxiv.date_window(topic(days=3), until=dt.date(2026, 11, 5)),
+                         (dt.date(2026, 11, 2), dt.date(2026, 11, 5)))
+
+    def test_paper_dirname_rejects_paths(self):
+        self.assertEqual(render.paper_dirname("hep-th/9901001"), "hep-th_9901001")
+        self.assertEqual(render.paper_dirname("2611.01234"), "2611.01234")
+        for bad in ("..", "../etc", "2611.01234/../x", ""):
+            with self.assertRaises(ValueError):
+                render.paper_dirname(bad)
 
 
 class ReviewerTests(unittest.TestCase):
@@ -155,6 +181,9 @@ class RenderTests(unittest.TestCase):
         self.assertIn("# Tool-Using LLM Agents for Scientific Discovery", md)
         self.assertIn("> **리뷰 근거**: 초록", md)
         self.assertIn("| Overall | 4/5 |", md)
+        self.assertIn("## 실험 결과", md)
+        old = {k: v for k, v in REVIEW.items() if k != "experiments"}  # 이전 형식 리뷰
+        self.assertNotIn("## 실험 결과", render.review_markdown(paper, old, meta))
         with tempfile.TemporaryDirectory() as d:
             pdir = Path(d) / "2611.01234"
             pdir.mkdir()
@@ -264,9 +293,169 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertEqual(searched, [])
 
+    def test_cli_run_reviews_then_skips(self):
+        from arxiv_review import service
+        saved = (arxiv.search_detailed, reviewer.review_paper)
+        calls = []
+        arxiv.search_detailed = lambda t, **kw: arxiv.SearchResult(
+            arxiv.parse_feed(FEED)[:1], kw["since"], kw["until"], True)
+        reviewer.review_paper = lambda *a, **k: calls.append(1) or dict(REVIEW)
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                cfg = Path(d) / "config.json"
+                cfg.write_text(json.dumps({"output_dir": "out", "review": {"fulltext": False}}))
+                argv = ["--config", str(cfg), "run", "--category", "cs.CL",
+                        "--from", "2026-11-01", "--to", "2026-11-05", "--skip-login-check"]
+                self.assertEqual(cli.main(argv), 0)
+                self.assertEqual(cli.main(argv), 0)  # 두 번째는 건너뛴다
+                self.assertEqual(len(calls), 1)
+                entry = service.load_entry(Path(d) / "out", "adhoc", "2611.01234")
+                self.assertEqual(entry["review"]["overall"], 4)
+                self.assertTrue((Path(d) / "out" / "adhoc" / "index.html").exists())
+                self.assertEqual(cli.main(argv[:-1] + ["--from", "2026-11-09", "--dry-run"]), 2)
+        finally:
+            arxiv.search_detailed, reviewer.review_paper = saved
+
     def test_example_config_is_valid(self):
         config = load_config(Path(__file__).parent.parent / "config.example.json")
         self.assertIn("llm-agents", config.topics)
+
+
+class WebTests(unittest.TestCase):
+    """실제 HTTP 서버를 임의 포트에 띄워 API 와 보안 검사를 확인한다."""
+
+    def setUp(self):
+        import threading
+        from http.server import ThreadingHTTPServer
+        from arxiv_review import service, web
+        self.tmp = tempfile.TemporaryDirectory()
+        cfg = Path(self.tmp.name) / "config.json"
+        cfg.write_text(json.dumps({"output_dir": "out"}))
+        self.patches = [(arxiv, "search_detailed", arxiv.search_detailed),
+                        (auth, "check", auth.check),
+                        (service, "review_and_save", service.review_and_save)]
+        arxiv.search_detailed = lambda t, **kw: arxiv.SearchResult(
+            arxiv.apply_filters(arxiv.parse_feed(FEED), t)[:t.max_papers],
+            kw.get("since") or dt.date(2026, 11, 3), kw.get("until") or dt.date(2026, 11, 10), False)
+        auth.check = lambda: auth.LoginStatus(True, True, "Claude Pro Account", True)
+        real_save = self.patches[2][2]
+
+        def fake_review(paper, topic_name, output_dir, opts, log=print):
+            from arxiv_review import reviewer as r
+            original = r.review_paper
+            r.review_paper = lambda *a, **k: dict(REVIEW)
+            try:
+                return real_save(paper, topic_name, output_dir,
+                                 service.ReviewOptions(use_fulltext=False), log)
+            finally:
+                r.review_paper = original
+        service.review_and_save = fake_review
+        self.app = web.App(cfg)
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), None)
+        self.port = self.server.server_address[1]
+        self.server.RequestHandlerClass = web.make_handler(self.app, self.port)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        for obj, name, value in self.patches:
+            setattr(obj, name, value)
+        self.tmp.cleanup()
+
+    def call(self, path, body=None, headers=None):
+        import http.client
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        hdrs = {"Host": f"localhost:{self.port}"}
+        if body is not None:
+            hdrs["Content-Type"] = "application/json"
+        hdrs.update(headers or {})
+        conn.request("GET" if body is None else "POST", path,
+                     None if body is None else json.dumps(body), hdrs)
+        res = conn.getresponse()
+        data = res.read()
+        conn.close()
+        try:
+            return res.status, json.loads(data)
+        except ValueError:
+            return res.status, data.decode()
+
+    def test_page_and_status(self):
+        status, page = self.call("/")
+        self.assertEqual(status, 200)
+        self.assertIn("arXiv 한국어 리뷰", page)
+        status, data = self.call("/api/status")
+        self.assertTrue(data["login"]["subscription"])
+        self.assertIsNone(data["login"]["problem"])
+
+    def test_search_then_review_flow(self):
+        status, data = self.call("/api/search", {
+            "topic": "web", "categories": "cs.CL, cs.AI", "keywords": "LLM agent",
+            "exclude": "survey", "date_from": "2026-11-01", "date_to": "2026-11-09", "max": 5})
+        self.assertEqual(status, 200, data)
+        self.assertEqual([r["paper"]["arxiv_id"] for r in data["results"]], ["2611.01234", "hep-th/9901001"])
+        self.assertEqual((data["since"], data["until"]), ("2026-11-01", "2026-11-09"))
+        self.assertIsNone(data["results"][0]["review"])
+        status, job = self.call("/api/review", {"topic": "web", "ids": ["2611.01234"]})
+        self.assertEqual(status, 200, job)
+        for _ in range(50):
+            status, job = self.call(f"/api/jobs/{job['id']}")
+            if job["state"] == "done":
+                break
+            time.sleep(0.05)
+        self.assertEqual(job["state"], "done")
+        review = job["items"][0]["review"]
+        self.assertIn("<strong>정확도</strong>", review["review_html"]["achievement"])
+        self.assertIn("experiments", review["review_html"])
+        out = Path(self.tmp.name) / "out" / "web"
+        self.assertTrue((out / "2611.01234" / "paper.json").exists())
+        self.assertTrue((out / "index.html").exists())  # CLI 와 같은 결과물
+        # 다시 검색하면 저장된 리뷰가 함께 온다
+        _, data = self.call("/api/search", {"topic": "web", "categories": "cs.CL",
+                                            "keywords": "LLM agent", "max": 5})
+        self.assertIsNotNone(data["results"][0]["review"])
+
+    def test_review_only_for_searched_ids(self):
+        status, data = self.call("/api/review", {"topic": "web", "ids": ["../../etc"]})
+        self.assertEqual(status, 400)
+        self.assertIn("검색으로 불러온 논문만", data["error"])
+
+    def test_login_problem_blocks_review(self):
+        self.call("/api/search", {"topic": "web", "categories": "cs.CL", "max": 5})
+        auth.check = lambda: auth.LoginStatus(True, True, "Claude API account", False)
+        status, data = self.call("/api/review", {"topic": "web", "ids": ["2611.01234"]})
+        self.assertEqual(status, 409)
+        self.assertTrue(data["login_problem"])
+
+    def test_bad_input(self):
+        status, data = self.call("/api/search", {"categories": "", "max": 5})
+        self.assertEqual(status, 400)
+        status, data = self.call("/api/search", {"categories": "cs.CL", "date_from": "11/01/2026"})
+        self.assertEqual(status, 400)
+        status, data = self.call("/api/search", {"categories": "cs.CL", "date_from": "2026-11-09",
+                                                 "date_to": "2026-11-01"})
+        self.assertEqual(status, 400)
+        self.assertIn("시작일", data["error"])
+
+    def test_topics_roundtrip(self):
+        status, data = self.call("/api/topics", {"topic": "rag", "categories": "cs.CL cs.IR",
+                                                 "keywords": "RAG\nretrieval", "max": 3, "days": 5})
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data["topics"]["rag"]["keywords"], ["RAG", "retrieval"])
+        # 터미널 쪽 설정 파일에도 그대로 저장된다
+        self.assertEqual(load_config(self.app.config_path).topics["rag"].days, 5)
+        status, data = self.call("/api/topics/delete", {"topic": "rag"})
+        self.assertEqual(data["topics"], {})
+
+    def test_cross_site_requests_are_refused(self):
+        status, _ = self.call("/api/status", headers={"Host": "evil.example:80"})
+        self.assertEqual(status, 403)
+        status, _ = self.call("/api/search", {"categories": "cs.CL"},
+                              headers={"Origin": "https://evil.example"})
+        self.assertEqual(status, 403)
+        status, _ = self.call("/api/search", {"categories": "cs.CL"},
+                              headers={"Content-Type": "text/plain"})
+        self.assertEqual(status, 415)
 
 
 if __name__ == "__main__":

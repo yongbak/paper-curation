@@ -7,25 +7,19 @@
     python -m arxiv_review run --topic 내토픽 --dry-run  # 검색 결과만 확인
     python -m arxiv_review run --topic 내토픽            # 검색 + 리뷰 + index.html
     python -m arxiv_review build --topic 내토픽          # HTML 만 다시
+    python -m arxiv_review serve                        # 웹 UI: http://localhost:7777
 """
 from __future__ import annotations
 
 import argparse
 import datetime as dt
-import json
 import sys
-import time
 from pathlib import Path
 
-from . import arxiv, auth, fulltext, render, reviewer
+from . import arxiv, auth, fulltext, render, reviewer, service
+from .service import describe
 from .config import (Config, ConfigError, Topic, delete_topic, load_config,
                      save_topic)
-
-
-def _atomic_write(path: Path, text: str) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    tmp.replace(path)
 
 
 def _apply_overrides(topic: Topic, args) -> Topic:
@@ -63,21 +57,19 @@ def resolve_topic(args, config: Config) -> Topic:
     return _apply_overrides(topic, args)
 
 
-def describe(topic: Topic) -> str:
-    kws = ", ".join(topic.keywords) or "전체"
-    text = f"카테고리 {', '.join(topic.categories)} · 주제 {kws}"
-    if topic.exclude_keywords:
-        text += f" · 제외 {', '.join(topic.exclude_keywords)}"
-    if topic.primary_category_only:
-        text += " · primary 카테고리만"
-    return text
+def parse_date(value: str | None) -> dt.date | None:
+    if not value:
+        return None
+    try:
+        return dt.date.fromisoformat(value)
+    except ValueError as e:
+        raise ConfigError(f"날짜는 YYYY-MM-DD 형식이어야 합니다: {value!r}") from e
 
 
 def cmd_run(args, config: Config) -> int:
     topic = resolve_topic(args, config)
     model = args.model or config.review.model
     use_fulltext = config.review.fulltext and not args.no_fulltext
-    topic_dir = config.output_dir / topic.name
 
     if not args.dry_run and not args.skip_login_check:
         problem = auth.check().problem()
@@ -85,9 +77,18 @@ def cmd_run(args, config: Config) -> int:
             print(f"[로그인 확인] {problem}", file=sys.stderr)
             return 2
 
-    print(f"[검색] {describe(topic)} · 최근 {topic.days}일 · 최대 {topic.max_papers}편")
-    papers = arxiv.search(topic)
+    since, until = parse_date(args.date_from), parse_date(args.date_to)
+    try:
+        since, until = arxiv.date_window(topic, since=since, until=until)
+    except ValueError as e:
+        raise ConfigError(str(e)) from e
+    print(f"[검색] {describe(topic)} · {since} ~ {until} · 최대 {topic.max_papers}편")
+    result = arxiv.search_detailed(topic, since=since, until=until)
+    papers = result.papers
     print(f"  {len(papers)}편 발견")
+    if result.more_available:
+        print(f"  ※ 최대 {topic.max_papers}편에서 잘렸습니다. 기간 안에 논문이 더 있지만 "
+              f"{result.oldest} 이후 것만 포함됩니다. 기간 전체를 보려면 --max 를 늘리세요.")
     for p in papers:
         print(f"  - {p['published']} [{p['primary_category']}] {p['arxiv_id']} {p['title'][:80]}")
     if args.dry_run:
@@ -96,56 +97,33 @@ def cmd_run(args, config: Config) -> int:
     if use_fulltext and not fulltext.pymupdf_available():
         print("  (PyMuPDF 미설치 — 초록만으로 리뷰합니다. `pip install pymupdf` 로 본문 리뷰)")
         use_fulltext = False
+    opts = service.ReviewOptions(model=model, use_fulltext=use_fulltext,
+                                 max_chars=config.review.max_chars,
+                                 timeout=config.review.timeout_sec)
 
     done = failed = skipped = 0
     for i, paper in enumerate(papers, 1):
-        paper_dir = topic_dir / render.paper_dirname(paper["arxiv_id"])
-        record = paper_dir / "paper.json"
-        if record.exists() and not args.force:
+        if not args.force and service.load_entry(config.output_dir, topic.name, paper["arxiv_id"]):
             skipped += 1
             continue
         print(f"[리뷰 {i}/{len(papers)}] {paper['arxiv_id']} {paper['title'][:70]}")
-        text = None
-        if use_fulltext:
-            text = fulltext.fetch_fulltext(paper, config.review.max_chars)
-            if text and text.truncated:
-                print(f"  본문 {text.total_chars:,}자 중 앞 {len(text.text):,}자만 사용 "
-                      "(config.json 의 review.max_chars 로 조정)")
-            time.sleep(arxiv.REQUEST_INTERVAL)
         try:
-            review = reviewer.review_paper(
-                paper, text, model=model, timeout=config.review.timeout_sec)
+            service.review_and_save(paper, topic.name, config.output_dir, opts)
         except reviewer.UsageLimitError as e:
             print(f"  구독 사용 한도에 도달했습니다: {e}\n"
                   "  한도가 풀린 뒤 같은 명령을 다시 실행하면 남은 논문부터 이어집니다.",
                   file=sys.stderr)
             failed += sum(
-                not (topic_dir / render.paper_dirname(q["arxiv_id"]) / "paper.json").exists()
+                not service.load_entry(config.output_dir, topic.name, q["arxiv_id"])
                 for q in papers[i - 1:])
             break
         except reviewer.ReviewError as e:
             print(f"  실패: {e}", file=sys.stderr)
             failed += 1
             continue
-        meta = {
-            "basis": "fulltext" if text else "abstract",
-            "model": model,
-            "topic": topic.name,
-            "reviewed_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
-        }
-        if text:
-            meta["fulltext_chars"] = len(text.text)
-            meta["fulltext_total_chars"] = text.total_chars
-        paper_dir.mkdir(parents=True, exist_ok=True)
-        _atomic_write(paper_dir / "review.md", render.review_markdown(paper, review, meta))
-        # paper.json 을 마지막에 쓴다 — 이 파일의 존재가 '리뷰 완료' 표시다.
-        _atomic_write(record, json.dumps(
-            {"paper": paper, "review": review, "meta": meta},
-            ensure_ascii=False, indent=2))
         done += 1
 
-    topic_dir.mkdir(parents=True, exist_ok=True)
-    index = render.build_index(topic_dir, topic.name, describe(topic))
+    index = service.rebuild_index(config.output_dir, topic.name, describe(topic))
     print(f"[완료] 신규 리뷰 {done}편 · 기존 {skipped}편 건너뜀 · 실패/보류 {failed}편")
     print(f"  결과: {index}")
     return 1 if failed else 0
@@ -208,6 +186,11 @@ def cmd_status(args, config: Config) -> int:
     return 0
 
 
+def cmd_serve(args, config: Config) -> int:
+    from .web import serve
+    return serve(args.config, port=args.port)
+
+
 def _add_filter_args(p, *, topic_cmd: bool) -> None:
     p.add_argument("--category", action="append",
                    help="arXiv 카테고리 (반복 가능, 예: --category cs.CL --category cs.AI)")
@@ -244,6 +227,10 @@ def main(argv=None) -> int:
     run = sub.add_parser("run", help="검색 + 리뷰 + index.html")
     run.add_argument("--topic", help="등록한 검색 주제 이름 (topic add 로 등록)")
     _add_filter_args(run, topic_cmd=False)
+    run.add_argument("--from", dest="date_from", metavar="YYYY-MM-DD",
+                     help="검색 시작일 (제출일 기준). 주면 --days 대신 쓴다")
+    run.add_argument("--to", dest="date_to", metavar="YYYY-MM-DD",
+                     help="검색 종료일 (기본 오늘)")
     run.add_argument("--model", help="claude 모델 별칭/ID (기본 sonnet)")
     run.add_argument("--no-fulltext", action="store_true", help="PDF 본문 없이 초록만으로 리뷰")
     run.add_argument("--force", action="store_true", help="이미 리뷰한 논문도 다시 리뷰")
@@ -255,6 +242,10 @@ def main(argv=None) -> int:
     build = sub.add_parser("build", help="저장된 리뷰로 index.html 만 다시 생성")
     build.add_argument("--topic", required=True)
     build.set_defaults(func=cmd_build)
+
+    srv = sub.add_parser("serve", help="웹 UI 서버 실행 (기본 http://localhost:7777)")
+    srv.add_argument("--port", type=int, default=7777, help="포트 (기본 7777)")
+    srv.set_defaults(func=cmd_serve)
 
     args = parser.parse_args(argv)
     try:

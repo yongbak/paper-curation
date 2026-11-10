@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>arXiv 한국어 리뷰</title>
+<style>
+:root{--bg:#f7f6f3;--card:#fff;--fg:#1c1c1a;--muted:#6b6a64;--line:#e3e1db;--accent:#b3261e;
+--accent-fg:#fff;--ok:#1e7a3c;--warn:#9a6700;--err:#b3261e;--soft:#f1efe9;--field:#fff}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#151514;--card:#1e1e1c;
+--fg:#ecebe6;--muted:#9d9c95;--line:#34332f;--accent:#ff8a80;--accent-fg:#1c1c1a;--ok:#6fd08c;
+--warn:#e3b341;--err:#ff8a80;--soft:#262623;--field:#181817}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);line-height:1.6;
+font-family:-apple-system,"Pretendard","Noto Sans KR","Malgun Gothic",sans-serif;font-size:15px}
+.wrap{max-width:980px;margin:0 auto;padding:24px 16px 80px}
+header{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;margin-bottom:16px}
+h1{font-size:1.35rem;margin:0}
+.badge{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:999px;
+padding:2px 10px;font-size:.82rem;background:var(--card);color:var(--muted)}
+.badge.ok{color:var(--ok);border-color:currentColor}.badge.bad{color:var(--err);border-color:currentColor}
+.dot{width:8px;height:8px;border-radius:50%;background:currentColor}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin-bottom:14px}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 16px}
+.full{grid-column:1/-1}
+label.f{display:flex;flex-direction:column;gap:4px;font-size:.85rem;color:var(--muted)}
+label.f b{color:var(--fg);font-weight:600}
+input,select,textarea{font:inherit;color:var(--fg);background:var(--field);border:1px solid var(--line);
+border-radius:8px;padding:8px 10px;width:100%}
+textarea{resize:vertical;min-height:64px}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:-1px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.dates{display:flex;gap:8px;align-items:center}.dates input{flex:1;min-width:0}
+.chips button{font-size:.8rem;padding:3px 10px}
+.checks{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:.88rem}
+.checks label{display:flex;gap:6px;align-items:center;cursor:pointer}
+.checks input{width:auto}
+button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:8px;
+padding:8px 14px;cursor:pointer}
+button:hover{border-color:var(--accent)}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-fg);font-weight:600}
+button:disabled{opacity:.5;cursor:not-allowed}
+details.opts summary{cursor:pointer;color:var(--muted);font-size:.88rem;margin-top:4px}
+details.opts .grid{margin-top:10px}
+.hint{color:var(--muted);font-size:.8rem}
+.msg{padding:10px 12px;border-radius:8px;background:var(--soft);font-size:.88rem;margin:10px 0;white-space:pre-wrap}
+.msg.err{color:var(--err)}.msg.warn{color:var(--warn)}
+.summary-bar{display:flex;flex-wrap:wrap;justify-content:space-between;gap:10px;align-items:center;margin:20px 0 10px}
+.summary-bar h2{font-size:1.05rem;margin:0}
+.paper h3{font-size:1.06rem;margin:0 0 4px;line-height:1.4}
+.paper h3 a{color:inherit;text-decoration:none}.paper h3 a:hover{color:var(--accent)}
+.meta{color:var(--muted);font-size:.83rem;margin-bottom:8px}
+.tag{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:0 8px;margin-right:4px;font-size:.76rem}
+.label{font-size:.78rem;font-weight:700;color:var(--muted);letter-spacing:.02em;margin:12px 0 4px}
+.abstract{font-size:.9rem;color:var(--fg);opacity:.9}
+.abstract.clamp{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.link{background:none;border:0;padding:0;color:var(--accent);font-size:.82rem;cursor:pointer}
+.review{border-top:1px dashed var(--line);margin-top:12px;padding-top:4px}
+.review p{margin:4px 0}.review ul,.review ol{margin:4px 0;padding-left:22px}
+.review code{font-size:.88em;background:var(--soft);padding:1px 4px;border-radius:4px}
+.review details summary{cursor:pointer;color:var(--accent);font-size:.88rem;margin-top:10px}
+.review h4{font-size:.9rem;margin:14px 0 4px}
+.scores{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.state{display:flex;align-items:center;gap:8px;font-size:.88rem;color:var(--muted);margin-top:12px}
+.state.err{color:var(--err)}
+.spin{width:14px;height:14px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;
+animation:sp 1s linear infinite}@keyframes sp{to{transform:rotate(360deg)}}
+.progress{height:6px;background:var(--soft);border-radius:999px;overflow:hidden;margin-top:6px}
+.progress div{height:100%;background:var(--accent);width:0;transition:width .3s}
+.empty{text-align:center;color:var(--muted);padding:40px 0}
+@media(max-width:640px){.grid{grid-template-columns:1fr}.card{padding:14px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>arXiv 한국어 리뷰</h1>
+  <span id="login" class="badge"><span class="dot"></span>로그인 확인 중…</span>
+</header>
+<div id="loginMsg" class="msg err" hidden></div>
+
+<form id="form" class="card" autocomplete="off">
+  <div class="grid">
+    <label class="f">저장된 주제
+      <select id="saved"><option value="">— 새로 입력 —</option></select>
+    </label>
+    <label class="f">주제 이름 <span class="hint">결과 저장 폴더 이름 (영문·숫자·-·_)</span>
+      <input id="topic" value="web" required pattern="[A-Za-z0-9][A-Za-z0-9_\-]*">
+    </label>
+    <label class="f full"><b>분야 (arXiv 카테고리)</b>
+      <input id="categories" list="catlist" placeholder="cs.CL, cs.AI" required>
+      <span class="hint">쉼표로 여러 개 (OR). 목록: <a href="https://arxiv.org/category_taxonomy" target="_blank" rel="noopener">arxiv.org/category_taxonomy</a></span>
+    </label>
+    <label class="f full"><b>주제 키워드</b>
+      <textarea id="keywords" placeholder="retrieval augmented generation&#10;LLM agent"></textarea>
+      <span class="hint">한 줄에 하나 (OR). 제목·초록에서 구문으로 찾습니다. 비우면 분야 전체</span>
+    </label>
+    <label class="f full">제외 키워드
+      <input id="exclude" placeholder="survey, benchmark">
+    </label>
+    <label class="f"><b>기간 (제출일)</b>
+      <span class="dates"><input type="date" id="from" required> ~ <input type="date" id="to" required></span>
+      <span class="row chips"><button type="button" data-days="3">최근 3일</button>
+        <button type="button" data-days="7">7일</button><button type="button" data-days="30">30일</button></span>
+    </label>
+    <label class="f">최대 편수
+      <input type="number" id="max" min="1" max="200" value="10">
+      <span class="hint">최신순으로 이만큼만 가져옵니다</span>
+    </label>
+    <div class="full checks"><label><input type="checkbox" id="primary"> primary 카테고리만 (cross-list 제외)</label></div>
+  </div>
+  <details class="opts"><summary>리뷰 옵션</summary>
+    <div class="grid">
+      <label class="f">모델
+        <select id="model"><option>sonnet</option><option>opus</option><option>haiku</option></select>
+      </label>
+      <div class="checks full">
+        <label><input type="checkbox" id="fulltext" checked> PDF 본문으로 리뷰 <span id="pdfHint" class="hint"></span></label>
+        <label><input type="checkbox" id="force"> 이미 리뷰한 논문도 다시</label>
+        <label><input type="checkbox" id="skipLogin"> 구독 로그인 확인 건너뛰기</label>
+      </div>
+    </div>
+  </details>
+  <div class="row" style="margin-top:14px">
+    <button class="primary" type="submit" id="searchBtn">검색</button>
+    <button type="button" id="saveBtn">이 조건을 주제로 저장</button>
+    <button type="button" id="delBtn" hidden>저장된 주제 삭제</button>
+  </div>
+  <div id="formMsg" class="msg" hidden></div>
+</form>
+
+<div id="results"></div>
+</div>
+
+<datalist id="catlist">
+  <option value="cs.AI"><option value="cs.CL"><option value="cs.CV"><option value="cs.LG"><option value="cs.IR">
+  <option value="cs.RO"><option value="cs.MA"><option value="cs.SE"><option value="cs.CR"><option value="cs.HC">
+  <option value="stat.ML"><option value="q-bio.BM"><option value="q-bio.QM"><option value="physics.comp-ph">
+  <option value="cond-mat.mtrl-sci"><option value="eess.AS"><option value="eess.IV"><option value="math.OC">
+</datalist>
+
+<template id="paperTpl">
+  <article class="card paper">
+    <h3><a target="_blank" rel="noopener"></a></h3>
+    <div class="meta"></div>
+    <div class="label">ABSTRACT</div>
+    <div class="abstract clamp"></div>
+    <button type="button" class="link more">더 보기</button>
+    <div class="review"></div>
+  </article>
+</template>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const SECTIONS = [["known","알려진 것"],["gap","연구 갭"],["why","왜 중요한가"],["approach","접근법"],
+  ["how","방법론"],["achievement","성과"],["originality","독창성"],["limitation","한계와 후속 연구"],["verdict","총평"]];
+const SCORE_LABELS = {novelty:"Novelty",technical:"Technical",significance:"Significance",clarity:"Clarity",overall:"Overall"};
+let topics = {}, current = null, jobTimer = null, jobId = null;
+
+async function api(path, body) {
+  const opt = body === undefined ? {} : {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)};
+  const res = await fetch(path, opt);
+  const data = await res.json().catch(() => ({error:`서버 응답 오류 (${res.status})`}));
+  if (!res.ok) { const e = new Error(data.error || res.statusText); e.data = data; throw e; }
+  return data;
+}
+function show(el, text, kind) { el.hidden = !text; el.textContent = text || ""; el.className = "msg" + (kind ? " " + kind : ""); }
+function iso(d) { return d.toISOString().slice(0, 10); }
+function setDays(n, today) {
+  const t = today ? new Date(today + "T00:00:00Z") : new Date();
+  $("to").value = iso(t); t.setUTCDate(t.getUTCDate() - n); $("from").value = iso(t);
+}
+
+function formBody() {
+  return {topic:$("topic").value.trim(), categories:$("categories").value, keywords:$("keywords").value,
+    exclude:$("exclude").value, primary_only:$("primary").checked, date_from:$("from").value,
+    date_to:$("to").value, max:$("max").value,
+    days: Math.max(1, Math.round((new Date($("to").value) - new Date($("from").value)) / 864e5) || 7)};
+}
+
+async function loadStatus() {
+  try {
+    const s = await api("/api/status");
+    const b = $("login"), l = s.login;
+    b.className = "badge " + (l.problem ? "bad" : "ok");
+    b.innerHTML = '<span class="dot"></span>';
+    b.append(l.problem ? (l.logged_in ? `구독 로그인 아님 (${l.method || "알 수 없음"})` : "로그인 필요")
+                       : `구독 로그인됨 · ${l.method}`);
+    const tip = (l.problem || "").replace("--skip-login-check 로", "'리뷰 옵션 → 구독 로그인 확인 건너뛰기' 로");
+    show($("loginMsg"), l.problem ? "리뷰를 하려면 터미널에서 아래를 따라 한 뒤 이 페이지를 새로고침하세요.\n" + tip : "", "err");
+    $("model").value = s.defaults.model;
+    $("fulltext").checked = s.defaults.fulltext && s.pymupdf;
+    $("fulltext").disabled = !s.pymupdf;
+    $("pdfHint").textContent = s.pymupdf ? "" : "(PyMuPDF 미설치 — 초록만 사용)";
+    if (!$("from").value) setDays(7, s.today);
+  } catch (e) { $("login").textContent = "서버 연결 실패: " + e.message; }
+}
+
+async function loadTopics(select) {
+  topics = (await api("/api/topics")).topics;
+  const sel = $("saved"), keep = select ?? sel.value;
+  sel.length = 1;
+  for (const name of Object.keys(topics)) sel.add(new Option(name, name));
+  sel.value = topics[keep] ? keep : "";
+  $("delBtn").hidden = !sel.value;
+}
+function applyTopic(name) {
+  const t = topics[name]; $("delBtn").hidden = !t; if (!t) return;
+  $("topic").value = name; $("categories").value = t.categories.join(", ");
+  $("keywords").value = t.keywords.join("\n"); $("exclude").value = t.exclude_keywords.join(", ");
+  $("primary").checked = t.primary_category_only; $("max").value = t.max_papers;
+  setDays(t.days);
+}
+
+function renderReview(box, review, item) {
+  box.replaceChildren();
+  if (review) {
+    const r = review.review_html;
+    const add = (label, html) => { if (!html) return;
+      const l = document.createElement("div"); l.className = "label"; l.textContent = label;
+      const d = document.createElement("div"); d.innerHTML = html; box.append(l, d); };
+    add("한국어 요약", r.essence);
+    add("실험 결과", r.experiments || r.achievement);
+    const det = document.createElement("details");
+    const sum = document.createElement("summary"); sum.textContent = "전체 리뷰 보기"; det.append(sum);
+    for (const [k, label] of SECTIONS) {
+      if (!r[k] || (k === "achievement" && !r.experiments)) continue;
+      const h = document.createElement("h4"); h.textContent = label;
+      const d = document.createElement("div"); d.innerHTML = r[k]; det.append(h, d);
+    }
+    const sc = document.createElement("div"); sc.className = "scores";
+    for (const [k, v] of Object.entries(review.scores)) {
+      const t = document.createElement("span"); t.className = "tag"; t.textContent = `${SCORE_LABELS[k] || k} ${v}/5`; sc.append(t);
+    }
+    const info = document.createElement("div"); info.className = "hint";
+    info.textContent = `리뷰 근거: ${review.basis} · 모델 ${review.model} · ${review.reviewed_at.slice(0, 16).replace("T", " ")}`;
+    det.append(sc, info); box.append(det);
+    return;
+  }
+  const st = document.createElement("div"); st.className = "state";
+  if (item && (item.status === "running" || item.status === "pending")) {
+    st.innerHTML = '<span class="spin"></span>';
+    st.append(item.status === "running" ? (item.message || "리뷰하는 중") + " · 보통 30초~2분" : "대기 중");
+  } else {
+    if (item && (item.status === "error" || item.status === "held")) {
+      st.classList.add("err"); st.append((item.status === "error" ? "실패: " : "") + item.message + " ");
+    }
+    const btn = document.createElement("button"); btn.type = "button";
+    btn.textContent = item ? "다시 시도" : "이 논문 리뷰"; btn.dataset.review = box.dataset.id;
+    btn.disabled = !!jobId; st.append(btn);
+  }
+  box.append(st);
+}
+
+function renderResults(data) {
+  current = data; const root = $("results"); root.replaceChildren();
+  const bar = document.createElement("div"); bar.className = "summary-bar";
+  const h = document.createElement("h2");
+  h.textContent = `${data.results.length}편 · ${data.since} ~ ${data.until} · ${data.description}`;
+  const btn = document.createElement("button"); btn.className = "primary"; btn.id = "reviewAll";
+  btn.textContent = "아직 리뷰 안 된 논문 모두 리뷰"; btn.disabled = !!jobId;
+  bar.append(h, btn); root.append(bar);
+  const prog = document.createElement("div"); prog.id = "jobBox"; root.append(prog);
+  if (data.more_available) {
+    const w = document.createElement("div"); w.className = "msg warn";
+    w.textContent = `최대 ${data.max}편에서 잘렸습니다. 기간 안에 논문이 더 있지만 ${data.oldest} 이후 것만 표시합니다. 기간 전체를 보려면 최대 편수를 늘리세요.`;
+    root.append(w);
+  }
+  if (!data.results.length) {
+    const e = document.createElement("div"); e.className = "empty card";
+    e.textContent = "조건에 맞는 논문이 없습니다. 기간을 늘리거나 키워드를 바꿔 보세요. 최근 1~2일 논문은 arXiv 검색에 아직 반영되지 않았을 수 있습니다.";
+    root.append(e); btn.disabled = true; return;
+  }
+  for (const {paper, review} of data.results) {
+    const node = $("paperTpl").content.firstElementChild.cloneNode(true);
+    const a = node.querySelector("h3 a"); a.href = paper.abs_url; a.textContent = paper.title;
+    const meta = node.querySelector(".meta");
+    for (const c of paper.categories) { const t = document.createElement("span"); t.className = "tag"; t.textContent = c; meta.append(t); }
+    const authors = paper.authors.slice(0, 8).join(", ") + (paper.authors.length > 8 ? ` 외 ${paper.authors.length - 8}명` : "");
+    meta.append(` ${paper.published} · ${paper.arxiv_id} · ${authors} · `);
+    const pdf = document.createElement("a"); pdf.href = paper.pdf_url; pdf.target = "_blank"; pdf.rel = "noopener"; pdf.textContent = "PDF"; meta.append(pdf);
+    const abs = node.querySelector(".abstract"); abs.textContent = paper.abstract;
+    node.querySelector(".more").onclick = (ev) => { abs.classList.toggle("clamp"); ev.target.textContent = abs.classList.contains("clamp") ? "더 보기" : "접기"; };
+    const box = node.querySelector(".review"); box.dataset.id = paper.arxiv_id; paper._review = review;
+    renderReview(box, review, null);
+    root.append(node);
+  }
+}
+
+function lockReviewButtons(on) {
+  document.querySelectorAll("[data-review], #reviewAll").forEach((b) => b.disabled = on);
+}
+
+async function startReview(ids) {
+  const msgBox = $("jobBox");
+  try {
+    const job = await api("/api/review", {...formBody(), topic: current.topic, ids,
+      model:$("model").value, fulltext:$("fulltext").checked, force:$("force").checked,
+      skip_login_check:$("skipLogin").checked});
+    jobId = job.id; lockReviewButtons(true); updateJob(job); pollJob();
+  } catch (e) {
+    const m = document.createElement("div"); m.className = "msg err"; m.textContent = e.message;
+    msgBox.replaceChildren(m);
+  }
+}
+function pollJob() {
+  clearTimeout(jobTimer);
+  jobTimer = setTimeout(async () => {
+    try { const job = await api("/api/jobs/" + jobId); updateJob(job); if (job.state === "queued" || job.state === "running") pollJob(); else finishJob(job); }
+    catch (e) { finishJob({message: e.message, state:"error"}); }
+  }, 2000);
+}
+function updateJob(job) {
+  const done = job.items.filter((i) => ["done","error","held"].includes(i.status)).length;
+  const box = $("jobBox"); box.replaceChildren();
+  const m = document.createElement("div"); m.className = "msg";
+  m.textContent = `리뷰 진행: ${done} / ${job.items.length}편` + (job.message ? ` · ${job.message}` : "");
+  const p = document.createElement("div"); p.className = "progress";
+  const fill = document.createElement("div"); fill.style.width = (100 * done / job.items.length) + "%"; p.append(fill);
+  m.append(p); box.append(m);
+  for (const item of job.items) {
+    const reviewBox = document.querySelector(`.review[data-id="${CSS.escape(item.id)}"]`);
+    if (!reviewBox) continue;
+    const r = current.results.find((x) => x.paper.arxiv_id === item.id);
+    if (item.review) r.review = item.review;
+    renderReview(reviewBox, item.status === "done" ? item.review : null, item);
+  }
+}
+function finishJob(job) {
+  jobId = null; lockReviewButtons(false);
+  const box = $("jobBox");
+  if (job.state !== "done") {
+    const m = document.createElement("div"); m.className = "msg err"; m.textContent = job.message || "리뷰가 중단됐습니다"; box.append(m);
+  }
+  if (current) for (const r of current.results) {
+    const b = document.querySelector(`.review[data-id="${CSS.escape(r.paper.arxiv_id)}"]`);
+    if (b && r.review) renderReview(b, r.review, null);
+  }
+}
+
+$("form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const btn = $("searchBtn"); btn.disabled = true; btn.textContent = "검색 중…";
+  show($("formMsg"), "");
+  try { renderResults(await api("/api/search", formBody())); }
+  catch (e) { show($("formMsg"), e.message, "err"); }
+  finally { btn.disabled = false; btn.textContent = "검색"; }
+});
+$("results").addEventListener("click", (ev) => {
+  const t = ev.target;
+  if (t.id === "reviewAll") {
+    const ids = current.results.filter((r) => !r.review || $("force").checked).map((r) => r.paper.arxiv_id);
+    if (ids.length) startReview(ids); else show($("formMsg"), "모든 논문이 이미 리뷰돼 있습니다. 다시 하려면 리뷰 옵션에서 '이미 리뷰한 논문도 다시'를 켜세요.", "warn");
+  } else if (t.dataset.review) startReview([t.dataset.review]);
+});
+document.querySelectorAll("[data-days]").forEach((b) => b.onclick = () => setDays(+b.dataset.days));
+$("saved").onchange = (ev) => applyTopic(ev.target.value);
+$("saveBtn").onclick = async () => {
+  try { const r = await api("/api/topics", formBody()); await loadTopics(r.saved);
+    show($("formMsg"), `주제 '${r.saved}' 를 저장했습니다. 터미널에서도 --topic ${r.saved} 로 쓸 수 있습니다.`); }
+  catch (e) { show($("formMsg"), e.message, "err"); }
+};
+$("delBtn").onclick = async () => {
+  const name = $("saved").value; if (!name || !confirm(`주제 '${name}' 를 삭제할까요? 만든 리뷰는 남습니다.`)) return;
+  try { await api("/api/topics/delete", {topic:name}); await loadTopics(""); show($("formMsg"), `주제 '${name}' 를 삭제했습니다.`); }
+  catch (e) { show($("formMsg"), e.message, "err"); }
+};
+loadStatus(); loadTopics().catch((e) => show($("formMsg"), e.message, "err"));
+</script>
+</body>
+</html>

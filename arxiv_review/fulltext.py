@@ -6,7 +6,7 @@ import sys
 import urllib.request
 from dataclasses import dataclass
 
-from .arxiv import USER_AGENT
+from .arxiv import USER_AGENT, throttle
 
 _REFERENCES_RE = re.compile(r"\n\s*(references|bibliography)\s*\n", re.IGNORECASE)
 
@@ -61,6 +61,7 @@ def fetch_fulltext(paper: dict, max_chars: int) -> FullText | None:
     if not pymupdf_available():
         return None
     try:
+        throttle()
         req = urllib.request.Request(paper["pdf_url"], headers={"User-Agent": USER_AGENT})
         with urllib.request.urlopen(req, timeout=120) as resp:
             data = resp.read()

@@ -38,6 +38,10 @@ REVIEW_SCHEMA = {
         "achievement": {"type": "string",
                         "description": "성과. 마크다운 번호 목록, 각 항목 '**굵은 제목**: 설명'."},
         "how": {"type": "string", "description": "방법론. 마크다운 bullet 목록."},
+        "experiments": {"type": "string", "description": (
+            "실험 설정과 결과. 마크다운 bullet 목록으로 데이터셋·벤치마크, 비교 baseline, "
+            "평가 지표, 주요 수치 결과를 원문 수치 그대로 적는다. 실험이 없거나 제공된 "
+            "텍스트로 확인할 수 없으면 그 사실을 적는다.")},
         "originality": {"type": "string", "description": "독창성. 마크다운 bullet 목록."},
         "limitation": {"type": "string",
                        "description": "한계와 후속 연구. 마크다운 bullet 목록."},

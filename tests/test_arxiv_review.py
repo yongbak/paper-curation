@@ -85,8 +85,16 @@ class FeedTests(unittest.TestCase):
         self.assertIn("submittedDate:[202611030000 TO 202611102359]",
                       params["search_query"][0])
         self.assertEqual(params["sortBy"], ["submittedDate"])
+        self.assertEqual(params["max_results"], ["2"])  # 1편을 원하면 2편만 묻는다 (더 있는지 확인용 1편)
         self.assertEqual(len(urls), 1)  # 한 페이지가 꽉 차지 않으면 더 요청하지 않는다
 
+
+    def test_page_size_follows_request(self):
+        self.assertEqual(arxiv.page_size_for(topic(), 1), 2)
+        self.assertEqual(arxiv.page_size_for(topic(), 10), 11)
+        self.assertEqual(arxiv.page_size_for(topic(exclude_keywords=["survey"]), 10), 33)
+        self.assertEqual(arxiv.page_size_for(topic(primary_category_only=True), 1), 6)
+        self.assertEqual(arxiv.page_size_for(topic(), 200), arxiv.PAGE_SIZE)
 
     def test_explicit_date_range(self):
         urls = []

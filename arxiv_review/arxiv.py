@@ -229,6 +229,18 @@ def date_window(topic: Topic, *, since: dt.date | None = None,
     return since, until
 
 
+def page_size_for(topic: Topic, limit: int) -> int:
+    """arXiv 에 요청할 편수. 필요한 만큼만 묻는다 (1편을 원하는데 100편을 묻지 않는다).
+
+    limit+1 편이면 '기간 안에 더 있는지' 까지 알 수 있다. 제외 키워드·primary 한정은
+    받은 뒤에 거르므로 여유를 둔다 — 너무 작게 물으면 페이지를 여러 번 요청하게 된다.
+    """
+    want = limit + 1
+    if topic.exclude_keywords or topic.primary_category_only:
+        want = want * 3
+    return max(1, min(PAGE_SIZE, want))
+
+
 def search_detailed(topic: Topic, *, since: dt.date | None = None,
                     until: dt.date | None = None, today: dt.date | None = None,
                     limit: int | None = None, fetch=_fetch) -> SearchResult:
@@ -236,18 +248,19 @@ def search_detailed(topic: Topic, *, since: dt.date | None = None,
     since, until = date_window(topic, since=since, until=until, today=today)
     limit = limit or topic.max_papers
     query = build_query(topic, since, until)
+    page_size = page_size_for(topic, limit)
     collected: list[dict] = []
     start = 0
     while True:
         url = API_URL + "?" + urllib.parse.urlencode({
-            "search_query": query, "start": start, "max_results": PAGE_SIZE,
+            "search_query": query, "start": start, "max_results": page_size,
             "sortBy": "submittedDate", "sortOrder": "descending"})
         page = parse_feed(fetch(url))
         collected = apply_filters(collected + page, topic)
         # limit 보다 1편 더 모아야 '잘렸는지' 알 수 있다
-        if len(collected) > limit or len(page) < PAGE_SIZE:
+        if len(collected) > limit or len(page) < page_size:
             break
-        start += PAGE_SIZE
+        start += page_size
     return SearchResult(papers=collected[:limit], since=since, until=until,
                         more_available=len(collected) > limit)
 

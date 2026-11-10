@@ -17,6 +17,7 @@ import queue
 import re
 import sys
 import threading
+import time
 import uuid
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -29,6 +30,8 @@ from .config import (TOPIC_RE, ConfigError, Topic, delete_topic, load_config, sa
 
 STATIC_DIR = Path(__file__).parent / "static"
 MAX_BODY = 1_000_000
+LOGIN_CACHE_SEC = 60
+CLIENT_GONE = (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)
 MAX_WEB_PAPERS = 200
 DEFAULT_PORT = 7777
 
@@ -110,6 +113,7 @@ class App:
         self.lock = threading.Lock()
         self.papers: dict[str, dict] = {}   # 검색에서 받은 논문 (리뷰 요청은 ID 로만 받는다)
         self.jobs: dict[str, dict] = {}
+        self._login_cache = None
         self.descriptions: dict[str, str] = {}  # 주제 이름 → 마지막 검색 조건 (index.html 부제)
         self.queue: queue.Queue = queue.Queue()
         threading.Thread(target=self._worker, daemon=True).start()
@@ -119,8 +123,20 @@ class App:
         return load_config(self.config_path)
 
     # ---- API -----------------------------------------------------------
-    def status(self) -> dict:
+    def login_status(self) -> auth.LoginStatus:
+        """페이지를 열 때마다 claude 를 두 번 실행하면 느리다 (Windows 에서 수 초).
+        정상 결과만 잠시 재사용한다 — 문제 상태는 매번 다시 봐야 로그인 직후 새로고침에 반영된다."""
+        with self.lock:
+            cached = self._login_cache
+        if cached and time.monotonic() - cached[0] < LOGIN_CACHE_SEC:
+            return cached[1]
         login = auth.check()
+        with self.lock:
+            self._login_cache = (time.monotonic(), login) if login.problem() is None else None
+        return login
+
+    def status(self) -> dict:
+        login = self.login_status()
         cfg = self.config()
         return {
             "login": {"installed": login.installed, "logged_in": login.logged_in,
@@ -279,8 +295,12 @@ def make_handler(app: App, port: int):
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("X-Frame-Options", "DENY")
-            self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.end_headers()
+                self.wfile.write(body)
+            except CLIENT_GONE:
+                # 응답 전에 브라우저가 연결을 끊었다 (새로고침·탭 닫기). 받을 쪽이 없으니 그냥 끝낸다.
+                self.close_connection = True
 
         def _json(self, status: int, data: dict) -> None:
             self._send(status, json.dumps(data, ensure_ascii=False).encode(), "application/json; charset=utf-8")
@@ -296,17 +316,20 @@ def make_handler(app: App, port: int):
             return True
 
         def _handle(self, fn) -> None:
+            # 응답을 만드는 단계의 오류만 분류한다. 보내는 단계의 연결 끊김(OSError)을
+            # arXiv 네트워크 오류로 착각하면 끊긴 연결에 오류 응답을 또 쓰려다 실패한다.
             try:
-                self._json(HTTPStatus.OK, fn())
+                status, data = HTTPStatus.OK, fn()
             except BadRequest as e:
-                self._json(e.status, {"error": str(e), **e.extra})
+                status, data = e.status, {"error": str(e), **e.extra}
             except ConfigError as e:
-                self._json(HTTPStatus.BAD_REQUEST, {"error": str(e)})
+                status, data = HTTPStatus.BAD_REQUEST, {"error": str(e)}
             except arxiv.ArxivUnavailable as e:  # 429 제한, 인증서 문제 — 안내문을 그대로
-                self._json(HTTPStatus.SERVICE_UNAVAILABLE,
-                           {"error": str(e), "retry_after": getattr(e, "retry_after", None)})
+                status, data = HTTPStatus.SERVICE_UNAVAILABLE, {
+                    "error": str(e), "retry_after": getattr(e, "retry_after", None)}
             except OSError as e:  # arXiv 네트워크 오류 등
-                self._json(HTTPStatus.BAD_GATEWAY, {"error": f"네트워크 오류: {e}"})
+                status, data = HTTPStatus.BAD_GATEWAY, {"error": f"네트워크 오류: {e}"}
+            self._json(status, data)
 
         def do_GET(self):
             if not self._guard():

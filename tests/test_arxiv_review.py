@@ -2,6 +2,7 @@ import datetime as dt
 import json
 import subprocess
 import tempfile
+import threading
 import time
 import unittest
 import urllib.parse
@@ -525,6 +526,42 @@ class WebTests(unittest.TestCase):
         _, data = self.call("/api/search", {"topic": "web", "categories": "cs.CL",
                                             "keywords": "LLM agent", "max": 5})
         self.assertIsNotNone(data["results"][0]["review"])
+
+    def test_client_disconnect_is_not_an_error(self):
+        """응답 전에 브라우저가 끊어도(새로고침) 서버가 오류 응답을 또 쓰려다 실패하지 않는다."""
+        import socket
+        import struct
+        errors = []
+        self.server.handle_error = lambda request, address: errors.append(address)
+        started = threading.Event()
+
+        def slow_status():
+            started.set()
+            time.sleep(0.4)
+            return {"ok": True}
+        self.app.status = slow_status
+        sock = socket.create_connection(("127.0.0.1", self.port))
+        sock.sendall(f"GET /api/status HTTP/1.1\r\nHost: localhost:{self.port}\r\n\r\n".encode())
+        started.wait(2)
+        # RST 로 끊는다 — Windows 의 WinError 10053 처럼 서버의 쓰기가 실패하게
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        sock.close()
+        time.sleep(0.8)
+        self.assertEqual(errors, [])
+        status, data = self.call("/api/topics")  # 서버는 계속 정상
+        self.assertEqual(status, 200)
+
+    def test_login_status_reuses_only_good_results(self):
+        calls = []
+        auth.check = lambda: calls.append(1) or auth.LoginStatus(True, True, "Claude Pro Account", True)
+        self.call("/api/status")
+        self.call("/api/status")
+        self.assertEqual(len(calls), 1)
+        self.app._login_cache = None
+        auth.check = lambda: calls.append(1) or auth.LoginStatus(True, False)
+        self.call("/api/status")
+        self.call("/api/status")
+        self.assertEqual(len(calls), 3)  # 로그인 안 된 상태는 매번 다시 확인
 
     def test_rate_limit_reports_wait_time(self):
         def limited(*a, **k):

@@ -34,6 +34,8 @@ arXiv 특정 카테고리·주제 검색 → 한국어 리뷰 → 검색 가능�
 - arXiv 요청 간격은 `arxiv.throttle()` 이 프로세스 전체에서 지킨다 (웹은 검색·리뷰가 동시에 돈다).
 - 웹 서버는 127.0.0.1 에만 바인딩하고 Host/Origin/Content-Type 을 검사한다 — 구독 사용량을 쓰는 서버다.
   리뷰 요청은 검색으로 받은 arXiv ID 만 받고, 논문 데이터는 서버가 가진 것을 쓴다.
+- 웹 핸들러는 응답을 만드는 단계와 보내는 단계를 나눈다. 보내다 난 연결 끊김(OSError)을
+  arXiv 오류로 분류하면 끊긴 연결에 오류 응답을 또 쓰다 실패한다 (Windows WinError 10053).
 - arXiv 로 가는 모든 HTTPS 요청은 `net.ssl_context()` 를 쓴다. 기본 urllib 컨텍스트는 macOS 와
   회사 네트워크에서 CERTIFICATE_VERIFY_FAILED 를 낸다. 인증서 오류는 재시도하지 않고 바로 안내한다.
 - `render.paper_dirname()` 은 arXiv ID 형식만 통과시킨다 (경로 조작 차단).

@@ -345,6 +345,19 @@ function renderResults(data) {
   }
 }
 
+// arXiv 가 429 를 주면 알려 준 시간 동안 검색 버튼을 잠근다 (그 사이 요청은 제한만 늘린다)
+let searchTimer = null;
+function lockSearch(seconds) {
+  const btn = $("searchBtn"); const until = Date.now() + seconds * 1000;
+  clearInterval(searchTimer);
+  const tick = () => {
+    const left = Math.ceil((until - Date.now()) / 1000);
+    if (left <= 0) { clearInterval(searchTimer); btn.disabled = false; btn.textContent = "검색"; return; }
+    btn.disabled = true; btn.textContent = `${left}초 뒤 검색 가능`;
+  };
+  tick(); searchTimer = setInterval(tick, 1000);
+}
+
 function lockReviewButtons(on) {
   document.querySelectorAll("[data-review], #reviewAll").forEach((b) => b.disabled = on);
 }
@@ -404,9 +417,12 @@ $("form").addEventListener("submit", async (ev) => {
   }
   const btn = $("searchBtn"); btn.disabled = true; btn.textContent = "검색 중…";
   show($("formMsg"), "");
-  try { renderResults(await api("/api/search", formBody())); }
-  catch (e) { show($("formMsg"), e.message, "err"); }
-  finally { btn.disabled = false; btn.textContent = "검색"; }
+  try { renderResults(await api("/api/search", formBody())); btn.disabled = false; btn.textContent = "검색"; }
+  catch (e) {
+    show($("formMsg"), e.message, "err");
+    const wait = e.data && e.data.retry_after;
+    if (wait) lockSearch(wait); else { btn.disabled = false; btn.textContent = "검색"; }
+  }
 });
 $("results").addEventListener("click", (ev) => {
   const t = ev.target;

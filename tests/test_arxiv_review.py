@@ -101,21 +101,69 @@ class FeedTests(unittest.TestCase):
         self.assertEqual(arxiv.date_window(topic(days=3), until=dt.date(2026, 11, 5)),
                          (dt.date(2026, 11, 2), dt.date(2026, 11, 5)))
 
-    def test_rate_limit_becomes_clear_error(self):
+    def _limited(self, retry_after=None, calls=None):
         import io
         import urllib.error
-        from unittest import mock
 
-        def limited(*a, **k):
-            raise urllib.error.HTTPError("u", 429, "Too Many Requests", {}, io.BytesIO())
-        waits = []
-        with mock.patch.object(arxiv.urllib.request, "urlopen", limited), \
-                mock.patch.object(arxiv.time, "sleep", waits.append), \
-                mock.patch.object(arxiv, "throttle", lambda: None):
+        def urlopen(*a, **k):
+            if calls is not None:
+                calls.append(1)
+            headers = {"Retry-After": str(retry_after)} if retry_after else {}
+            raise urllib.error.HTTPError("u", 429, "Too Many Requests", headers, io.BytesIO())
+        return urlopen
+
+    def _patched(self, urlopen, waits):
+        from contextlib import ExitStack
+        from unittest import mock
+        stack = ExitStack()
+        stack.enter_context(mock.patch.object(arxiv.urllib.request, "urlopen", urlopen))
+        stack.enter_context(mock.patch.object(arxiv.time, "sleep", waits.append))
+        stack.enter_context(mock.patch.object(arxiv, "throttle", lambda: None))
+        stack.callback(arxiv.reset_state)
+        arxiv.reset_state()
+        return stack
+
+    def test_rate_limit_retries_then_explains(self):
+        waits, calls = [], []
+        with self._patched(self._limited(calls=calls), waits):
             with self.assertRaises(arxiv.RateLimited) as cm:
-                arxiv._fetch("https://export.arxiv.org/api/query")
-        self.assertIn("1~2분 뒤", str(cm.exception))
-        self.assertEqual(waits, [30, 60])  # 일반 오류(10, 20초)보다 길게 기다린다
+                arxiv._fetch("https://export.arxiv.org/api/query?a")
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(waits, [30, 60])      # 일반 오류(10, 20초)보다 길게 기다린다
+        self.assertEqual(cm.exception.retry_after, 90)
+        self.assertIn("90초 뒤", str(cm.exception))
+
+    def test_retry_after_header_is_honored(self):
+        waits = []
+        with self._patched(self._limited(retry_after=45), waits):
+            with self.assertRaises(arxiv.RateLimited):
+                arxiv._fetch("https://export.arxiv.org/api/query?b")
+        self.assertEqual(waits, [45, 45])
+
+    def test_web_mode_fails_fast_and_holds_off(self):
+        waits, calls = [], []
+        with self._patched(self._limited(calls=calls), waits):
+            for _ in range(3):  # 웹에서 검색 버튼을 세 번 눌러도
+                with self.assertRaises(arxiv.RateLimited) as cm:
+                    arxiv._fetch("https://export.arxiv.org/api/query?c", retries=1, wait_on_limit=False)
+        self.assertEqual(len(calls), 1)       # arXiv 에는 한 번만 갔다 (나머지는 대기 중이라 보내지 않음)
+        self.assertEqual(waits, [])
+        self.assertEqual(cm.exception.retry_after, 30)
+
+    def test_same_search_is_cached(self):
+        import io
+        from unittest import mock
+        calls = []
+
+        def ok(*a, **k):
+            calls.append(1)
+            return mock.MagicMock(__enter__=lambda s: io.BytesIO(FEED), __exit__=lambda *x: False)
+        with self._patched(ok, []):
+            first = arxiv._fetch("https://export.arxiv.org/api/query?d")
+            second = arxiv._fetch("https://export.arxiv.org/api/query?d")
+            arxiv._fetch("https://export.arxiv.org/api/query?e")
+        self.assertEqual(first, second)
+        self.assertEqual(len(calls), 2)
 
     def test_certificate_error_is_explained_without_retry(self):
         import ssl
@@ -477,6 +525,15 @@ class WebTests(unittest.TestCase):
         _, data = self.call("/api/search", {"topic": "web", "categories": "cs.CL",
                                             "keywords": "LLM agent", "max": 5})
         self.assertIsNotNone(data["results"][0]["review"])
+
+    def test_rate_limit_reports_wait_time(self):
+        def limited(*a, **k):
+            raise arxiv.RateLimited("arXiv 가 요청을 잠시 제한했습니다 (HTTP 429). 45초 뒤", retry_after=45)
+        arxiv.search_detailed = limited
+        status, data = self.call("/api/search", {"categories": "cs.CL"})
+        self.assertEqual(status, 503)
+        self.assertEqual(data["retry_after"], 45)
+        self.assertIn("45초", data["error"])
 
     def test_review_only_for_searched_ids(self):
         status, data = self.call("/api/review", {"topic": "web", "ids": ["../../etc"]})

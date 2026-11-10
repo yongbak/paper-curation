@@ -158,7 +158,10 @@ class App:
             since, until = arxiv.date_window(topic, since=since, until=until)
         except ValueError as e:
             raise BadRequest(str(e)) from None
-        result = arxiv.search_detailed(topic, since=since, until=until)
+        # 웹은 429 에 기다리지 않는다 — 화면이 몇 분씩 멈추는 대신 남은 시간을 바로 알려 준다
+        result = arxiv.search_detailed(
+            topic, since=since, until=until,
+            fetch=lambda url: arxiv._fetch(url, retries=1, wait_on_limit=False))
         cfg = self.config()
         with self.lock:
             for p in result.papers:
@@ -300,7 +303,8 @@ def make_handler(app: App, port: int):
             except ConfigError as e:
                 self._json(HTTPStatus.BAD_REQUEST, {"error": str(e)})
             except arxiv.ArxivUnavailable as e:  # 429 제한, 인증서 문제 — 안내문을 그대로
-                self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(e)})
+                self._json(HTTPStatus.SERVICE_UNAVAILABLE,
+                           {"error": str(e), "retry_after": getattr(e, "retry_after", None)})
             except OSError as e:  # arXiv 네트워크 오류 등
                 self._json(HTTPStatus.BAD_GATEWAY, {"error": f"네트워크 오류: {e}"})
 

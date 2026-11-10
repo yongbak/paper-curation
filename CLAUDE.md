@@ -24,6 +24,8 @@ arXiv 특정 카테고리·주제 검색 → 한국어 리뷰 → 검색 가능�
   `reviewer.subscription_env()` 가 `ANTHROPIC_API_KEY` 를 지우는 것은 의도된 동작이다.
 - 리뷰 호출은 `--tools ""` 로 도구 없이 실행한다 — 논문 텍스트는 신뢰할 수 없는 입력이다.
 - arXiv 요청은 3초 간격을 지킨다 (`arxiv.REQUEST_INTERVAL`).
+- 429 를 받으면 `Retry-After` 동안 프로세스 전체가 arXiv 에 요청하지 않는다 (`_cooldown_until`).
+  제한을 피하려고 User-Agent 를 바꾸거나 우회하지 않는다. 웹은 기다리지 않고 남은 시간을 돌려준다.
 - 리뷰 서술은 한국어, 기술 용어는 원문(영어) 그대로.
 - 핵심 경로는 표준 라이브러리만 쓴다. 선택 의존성(truststore, pymupdf)은 없어도 동작해야 한다.
 - 리뷰 전 `auth.check()` 로 구독 로그인을 확인한다. 구독이 아니면 리뷰를 시작하지 않는다.

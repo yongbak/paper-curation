@@ -5,6 +5,7 @@ arXiv 이용 규칙: 요청 간 3초 간격, 식별 가능한 User-Agent.
 from __future__ import annotations
 
 import datetime as dt
+import math
 import re
 import sys
 import threading
@@ -107,24 +108,79 @@ def throttle() -> None:
         _last_request = time.monotonic()
 
 
-def _fetch(url: str, retries: int = 3) -> bytes:
+CACHE_TTL = 600          # 같은 검색은 10분 동안 다시 묻지 않는다
+MAX_LIMIT_WAIT = 300     # Retry-After 가 아무리 길어도 이 이상은 기다리지 않는다
+_state_lock = threading.Lock()
+_cooldown_until = 0.0    # arXiv 가 429 를 준 뒤 다시 요청하지 않을 시각 (프로세스 전체)
+_cache: dict[str, tuple[float, bytes]] = {}
+
+
+def reset_state() -> None:
+    """테스트용: 대기 상태와 캐시를 비운다."""
+    global _cooldown_until
+    with _state_lock:
+        _cooldown_until = 0.0
+        _cache.clear()
+
+
+def _cooldown_remaining() -> int:
+    with _state_lock:
+        return max(0, math.ceil(_cooldown_until - time.monotonic()))
+
+
+def _start_cooldown(seconds: int) -> None:
+    global _cooldown_until
+    with _state_lock:
+        _cooldown_until = max(_cooldown_until, time.monotonic() + seconds)
+
+
+def _retry_after(e: urllib.error.HTTPError) -> int | None:
+    value = (e.headers or {}).get("Retry-After") if hasattr(e, "headers") else None
+    try:
+        return max(1, int(str(value).strip()))
+    except (TypeError, ValueError):
+        return None  # HTTP 날짜 형식이거나 없음 → 기본 간격 사용
+
+
+def _limit_message(seconds: int) -> str:
+    return (f"arXiv 가 요청을 잠시 제한했습니다 (HTTP 429). {seconds}초 뒤 다시 시도하세요.\n"
+            "  이 컴퓨터에서 검색을 많이 하지 않았다면, 같은 네트워크(회사·기관 등)를 쓰는 "
+            "다른 사용자의 요청이 함께 집계됐을 수 있습니다.")
+
+
+def _fetch(url: str, retries: int = 3, wait_on_limit: bool = True) -> bytes:
+    """arXiv 요청. wait_on_limit=False 면 제한(429) 중일 때 기다리지 않고 바로 RateLimited."""
+    with _state_lock:
+        hit = _cache.get(url)
+    if hit and time.monotonic() - hit[0] < CACHE_TTL:
+        return hit[1]
     for attempt in range(retries):
+        remaining = _cooldown_remaining()
+        if remaining:
+            if not wait_on_limit:
+                raise RateLimited(_limit_message(remaining), retry_after=remaining)
+            print(f"  arXiv 요청 제한 중 — {remaining}초 기다립니다", file=sys.stderr)
+            time.sleep(remaining)
         try:
             throttle()
             req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
             with urllib.request.urlopen(req, timeout=60, context=ssl_context()) as resp:
-                return resp.read()
+                data = resp.read()
+            with _state_lock:
+                _cache[url] = (time.monotonic(), data)
+            return data
         except (urllib.error.URLError, TimeoutError) as e:
             if is_certificate_error(e):  # 다시 시도해도 같다 — 바로 해결 방법을 보여 준다
                 raise CertificateProblem(CERT_HELP) from e
-            limited = isinstance(e, urllib.error.HTTPError) and e.code in (429, 503)
+            if isinstance(e, urllib.error.HTTPError) and e.code in (429, 503):
+                delay = min(_retry_after(e) or 30 * (attempt + 1), MAX_LIMIT_WAIT)
+                _start_cooldown(delay)
+                if attempt == retries - 1 or not wait_on_limit:
+                    raise RateLimited(_limit_message(delay), retry_after=delay) from e
+                continue  # 다음 시도 앞에서 cooldown 만큼 기다린다
             if attempt == retries - 1:
-                if limited:
-                    raise RateLimited(
-                        "arXiv 가 요청을 잠시 제한했습니다 (짧은 시간에 검색이 많았음). "
-                        "1~2분 뒤 다시 시도하세요.") from e
                 raise
-            wait = (30 if limited else 10) * (attempt + 1)
+            wait = 10 * (attempt + 1)
             print(f"  arXiv 요청 실패({e}), {wait}초 후 재시도", file=sys.stderr)
             time.sleep(wait)
     raise AssertionError("unreachable")
@@ -132,6 +188,10 @@ def _fetch(url: str, retries: int = 3) -> bytes:
 
 class RateLimited(ArxivUnavailable):
     """arXiv 가 요청을 일시 제한했다 (HTTP 429/503)."""
+
+    def __init__(self, message: str, retry_after: int | None = None):
+        super().__init__(message)
+        self.retry_after = retry_after
 
 
 @dataclass

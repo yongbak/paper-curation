@@ -1,367 +1,245 @@
-# Paper Curation
+# arxiv-review
 
-**키 없이 설치하고, 단일 PDF 리뷰부터 전체 큐레이션까지 필요한 범위만 명시적으로 실행합니다.**
+arXiv 의 **특정 카테고리 + 특정 주제**만 검색해서, 각 논문의 **한국어 리뷰**를 만들고
+검색 가능한 HTML 한 장으로 보여 주는 도구입니다.
 
-논문 PDF → 한국어 구조화 리뷰 → 자동 분류 → 연구 동향 타임라인 → 검색 가능한 사이트 + **Deep Research**(논문 근거 RAG Q&A)까지 — Claude Code가 오케스트레이션하는 개인 논문 큐레이션 파이프라인.
+![arxiv-review 개요: 기간·주제 요청에서 전문 기반 한국어 요약까지](overview.png)
 
-**라이브 데모 — 설치 없이 바로 보기:**
+리뷰는 Anthropic API 키가 아니라 **Claude Code CLI(`claude`)** 로 만듭니다.
+`claude` 에 **Claude Pro 구독 계정**으로 로그인해 두면 사용량이 구독 한도에서 차감되고
+API 요금은 나가지 않습니다.
 
-- **Humanoid** — https://paper-curation.jehyunlee.dev/humanoid/
-- **Physical AI** — https://paper-curation.jehyunlee.dev/physical-ai/
-
-**세 가지 경로 — 필요한 범위만 고르고, 계획을 확인한 뒤 실행합니다:**
-
-![세 가지 사용 경로](usage_workflow.png)
-
-| 경로 | 무엇을 | 필요한 것 | 어디에서 |
-|------|--------|-----------|----------|
-| **Read** | 생성된 리뷰·검색·타임라인 열람, 공개 기관표·보고서 내보내기 | 키 없음 | 웹 사이트 · Zotero 우클릭 **Review HTML 열기** · 기능 모듈 |
-| **AI** | PDF 리뷰, 근거 기반 요약·질의·비교, AI Chat | 선택한 제공자 (Anthropic 기본 / OpenAI / Google, 요약·질의는 로컬 Ollama 가능) | Zotero 우클릭 **Review 생성** · **Paper Curation 기능 모듈** · CLI |
-| **Collection** | 검색 색인·지표·서지 DB·오디오·타임라인, Zotero 동기화·배포·이메일, 컬렉션 전체 처리 | 기능별 요구조건, 명시적 확인 | 기능 모듈 **컬렉션 관리 / 선택 기능** 탭 · `run_feature.py` · `run_full.py` |
-
-독립 기능 모듈과 CLI 작업은 **계획(요구조건·전송 대상·비용) → 확인 → 실행** 순서입니다.
-`local_review.py`는 추출·리뷰·HTML·서지 사이드카를 만들고, 공유 코퍼스에 등록된 논문은
-소속 토픽 페이지·검색 색인·이미 존재하는 네트워크까지 갱신합니다. 신규 예약 논문은
-등록 완료 후 갱신하며, 코퍼스 밖 독립 출력에는 적용하지 않습니다. Curio **Review 생성**은
-클릭 즉시 내부 준비 상태·자격증명을 검사한 뒤 리뷰 등록과 공유 관련 논문 기능을
-자동으로 더합니다. Curio는 리뷰 예산을 전달하지 않습니다. 이 원클릭 작업에는 계획 확인 창·OK·취소가 없습니다. 관련 논문 후보는
-SPECTER2 코사인 + 제목·저자 BM25/RRF로 로컬 검색하지만, 설명 캐시 미스 시에는
-양쪽 논문의 요약(제목·분류·리뷰 핵심·독창성 요약)을 Anthropic Sonnet 5에 보내는 짧은 유료 설명 호출이 추가됩니다.
-검색 색인은 기존 모드·모델을 유지하고 캐시를 재사용하며, hybrid의 새 청크는 Google
-임베딩 호출이 필요할 수 있습니다. 갱신 실패 시 생성된 리뷰는 보존하고 실패 단계를
-명시합니다. 코퍼스 전체 카테고리 재적합, 타임라인, 배포, 서지 DB 반영은 자동 실행하지
-않습니다. 실패해도 다른 제공자로 자동 전송하지 않고, API 키는 설정 파일이 아닌
-**OS 키 저장소**에 둡니다.
-
-📘 **[활용 매뉴얼](docs/user-guide.md)** — 어디에서 무엇을 설정하고 어떻게 동작시키는지 단계별 안내
-(설치·연결 → 키 저장 → 리뷰 → 모듈 → 상태 메시지 읽는 법). Zotero 플러그인 Curio와 CLI는
-같은 기능 레지스트리를 사용하며, 기능 ID·요구조건 표는
-[Setup Guide의 생성 영역](docs/setup-guide.md#공유-기능-레지스트리)이 기준입니다.
-
-🇬🇧 [English README](README.en.md)
-
-> **[기능 지도 바로 열기](https://tech.jehyunlee.dev/paper-curation/feature-map.html)** — 기능·파이프라인을 펼치고 클릭해 설명, 비용, 전송 대상을 확인하세요. 설치 없이 브라우저에서 동작합니다. [English](https://tech.jehyunlee.dev/paper-curation/feature-map.en.html)
-
-<details>
-<summary>🐱 전체 큐레이션(Collection 경로) 파이프라인 한 장 — 수집부터 배포까지</summary>
-
-![Paper Curation 전체 파이프라인](workflow.png)
-
-</details>
-
-> 📚 **[서지 확정 — 누가 어디 소속인가](docs/attribution.md)** — 논문의 저자를
-> 기관에 귀속시키는 과정, 왜 LLM 을 마지막에 두는지, 저자 신원을 어떻게
-> 정하는지를 따로 정리했습니다.
-
-## 목차
-
-- [📘 활용 매뉴얼](docs/user-guide.md) — 설정 위치와 단계별 동작법
-- [📖 독자로 둘러보기](#-독자로-둘러보기)
-- [🔧 운영자로 설치하기](#-운영자로-설치하기)
-- [💰 비용 가이드](#-비용-가이드)
-- [기능](#기능)
-- [파이프라인](#파이프라인)
-- [사용 모드](#사용-모드)
-- [서지 확정](docs/attribution.md) — 저자↔기관 귀속, 근거 등급, 검증
-- [문서](#문서) — Setup / Operations(megasearch · 한국 망 우회 · Concurrency) / Architecture
-- [발표/참고자료](#발표참고자료)
-
-## 📖 독자로 둘러보기
-
-설치도, API 키도 필요 없습니다. 위 라이브 데모 링크를 열면 바로 열람할 수 있습니다.
-
-- **웹에서 보기** — [Humanoid](https://paper-curation.jehyunlee.dev/humanoid/) · [Physical AI](https://paper-curation.jehyunlee.dev/physical-ai/). 카테고리별 카드, 검색, 타임라인, 논문별 한국어 리뷰 페이지가 모두 정적으로 제공됩니다.
-- **Deep Research 사용법** — 토픽 페이지 상단의 검색창에 자연어로 질문하면 됩니다. **검색(retrieval)은 키가 전혀 필요 없습니다** — 질의 임베딩은 서버(worker `/api/embed`)가 대신 계산합니다. 답변 생성만 본인 API 키(BYOK)를 브라우저에 입력하면 되며, 입력한 키의 제공자 하나로만 근거 답변을 스트리밍합니다(다른 제공자로 자동 전송 없음). 코퍼스 밖 최신 정보가 필요하면 **웹 검색 토글**을 켜 인라인 링크 인용으로 보강할 수 있습니다.
-- **RSS 구독** — 각 토픽은 Atom 피드를 제공합니다: [Humanoid feed](https://paper-curation.jehyunlee.dev/humanoid/feed.xml) · [Physical AI feed](https://paper-curation.jehyunlee.dev/physical-ai/feed.xml). 리더로 구독하면 새로 추가되는 리뷰를 받아볼 수 있습니다.
-
-## 🔧 운영자로 설치하기
-
-기본 설치에는 API 키나 Zotero 컬렉션이 필요하지 않습니다. `setup.py`는 완전
-비대화형으로 최소 `config.json`과 `docs/papers/`를 만들며, 키를 묻거나
-`config.json`에 복사하지 않고 전체 파이프라인도 자동 실행하지 않습니다.
-
-**가장 쉬운 방법 — Claude Code에서 한 줄** (전체 설치 플로우는 [CLAUDE.md](CLAUDE.md)의 "Installation Flow (Claude Code)" 참고):
-
-> "여기에 paper-curation을 설치해줘: https://github.com/jehyunlee/paper-curation"
-
-**수동 설치:**
-
-```bash
-# 1) 클론 + 의존성 (단일 conda env: py312)
-git clone https://github.com/jehyunlee/paper-curation.git && cd paper-curation
-conda create -n py312 -c conda-forge python=3.12 pip -y && conda activate py312
-pip install -r requirements.txt
-
-# 2) 키 없는 로컬 config + SKILL 생성/설치 (파이프라인은 실행하지 않음)
-PYTHONUTF8=1 python pipeline/setup.py
-
-# 기능 목록과 요청 계획(쓰기 없음)
-python pipeline/run_feature.py --list
-python pipeline/run_feature.py --request feature-request.json
-```
-
-기본 설치는 keyless입니다. 키는 설정 파일에 저장하지 않습니다. 환경변수가 있으면
-OS keyring보다 우선하며, 없으면 `credential:<provider>` 참조가 OS keyring
-서비스 `paper-curation`의 비밀값을 가리킵니다. 평문·null·실패 backend는
-거부되고 평문 config/file fallback은 없습니다. 키를 argv·요청 JSON·로그에 넣지
-마세요. 안전한 저장 예시는 Setup Guide의 credentials 절을 참고하세요.
-
-`--no-install`은 SKILL 설치만 건너뜁니다. setup은 PaperBanana를 클론하거나
-클러스터링을 시험하거나 첫 전체 실행을 시작하지 않습니다. 전체
-`run_full.py --mode curate`는 Zotero·Anthropic·Google 등 해당 워크플로의
-환경변수와 설정을 준비한 뒤 별도로 실행합니다. 배포/이메일도 별도 옵션입니다.
-
-### Zotero에서 시작하기 (Paper Curio)
-
-1. [Paper Curio 최신 릴리스](https://github.com/jehyunlee/paper-curio/releases/latest)에서 **사용 중인 Zotero 버전에 맞는 XPI**를 받아 Zotero **Tools → Plugins**에서 설치합니다 — Zotero 10은 `paper-curio-zotero10.xpi`, Zotero 9(7·8 포함)는 `paper-curio-zotero9.xpi`. 릴리스마다 두 파일이 함께 나오며 기능은 동일합니다.
-2. Zotero **Settings → Paper Curio → 출력 위치**에 위 체크아웃 경로를 넣습니다(Python 경로는 비우면 `py312`).
-3. **Settings → Paper Curio → API 키**에서 선택한 리뷰 제공자의 키를 **OS 키 저장소에 저장**합니다. 관련 논문 설명은 리뷰 기본값과 같은 Anthropic Sonnet 5(`claude-sonnet-5`)를 사용하므로, 리뷰에 OpenAI/Google을 골라도 Anthropic 자격증명이 필요합니다(`ANTHROPIC_API_KEY` 또는 `credential:anthropic`).
-4. 논문 항목 우클릭 → **paper-curation Review 생성**을 누르면 내부 준비 상태·자격증명 검사 후 즉시 시작합니다. 비모달 진행 창은 최종 상태까지 열려 있어 Zotero에서 읽기·가져오기를 계속할 수 있습니다. 실행 중 같은 메뉴를 다시 누르면 현재 생성 중임을 보여 주고 **대기**(기본값) 또는 **처음부터 다시 시작**을 고릅니다. 다시 시작을 고르면 진행 창은 기다리는 동안 재시작 중을 표시합니다. 현재 Python 단계가 원자적 게시를 안전하게 마친 뒤 이전 작업과 예약 정리를 끝내고, 같은 논문과 아직 처리하지 않은 선택 항목을 덮어써 캐시 없이 다시 생성합니다. 중복 생성은 시작하지 않으며 이미 발생한 API 비용은 환불되지 않습니다. 요약·질의·비교 등은 우클릭 **Paper Curation 기능 모듈**에서 계획 확인 후 실행합니다.
-
-화면별 설정 항목과 상태 메시지 해석은 **[활용 매뉴얼](docs/user-guide.md)** 을 따릅니다.
-
-### 명령줄에서 시작하기
-
-CLI는 [Setup Guide의 PDF 요청 예시](docs/setup-guide.md#단일-pdf-로컬-리뷰)를
-`review-request.json`으로 저장한 뒤 실행합니다.
-
-```bash
-python pipeline/local_review.py --request review-request.json            # 계획만
-python pipeline/local_review.py --request review-request.json --execute  # 확인 후 실행
-```
-
-`run_feature.py --request`도 **JSON 파일 경로**를 받습니다. 기능별 입력과 전송 대상은
-[레지스트리에서 생성한 기능표](docs/setup-guide.md#공유-기능-레지스트리)를 확인하세요.
-
-등록된 리뷰의 공유 연결 단계만 계획·실행하려면:
-
-```bash
-python pipeline/refresh_paper_connections.py --slug SLUG
-python pipeline/refresh_paper_connections.py --slug SLUG --execute
-```
-
-기능 요청에서는 `related-papers`의
-`params: {"slug":"SLUG"}`를 사용합니다. 후보 검색은 로컬이지만 설명에는 양쪽 논문의
-`text.md`와 Anthropic 자격증명이 필요하며, 설명 캐시 미스 시 유료 호출이 발생합니다.
-
-기본 리뷰는 Anthropic Sonnet 5이며 자동 fallback이 없습니다. OpenAI와 Google은
-명시적으로 고르는 provider입니다. Ollama `qwen3.8:27b-mlx`는 요약·대화 전용이며
-리뷰 대체가 아닙니다. `provider`, `credential_ref`, `budget`은 요청에서 선택할
-수 있고, 예산의 알 수 없는 요율 또는 상한 초과는 실행을 막습니다. 요청 계획을
-먼저 확인한 뒤에만 `--execute`를 붙이세요.
-
-기관·서지 DB 갱신은 `bibliography-update`의 별도 로컬 단계입니다. 기본은 변경분만
-ingest하며, `--changed-only --skip-zotero --offline --no-email`로 외부 동기화,
-온라인 보강, 이메일 없이 실행합니다. 온라인 보강은 선택 사항입니다.
-
-사전 준비 체크리스트, config.json 스키마, 설치 확인, 문제 해결 → **[Setup Guide](docs/setup-guide.md)**
-
-## 💰 비용 가이드
-
-> 정확한 실측이 아니라 **오더 오브 매그니튜드(order-of-magnitude) 가이드**입니다. 실제 비용은 논문 편수·본문 길이·연결 설명 캐시 적중률·타임라인 재생성 빈도·Insights opt-in 여부에 따라 크게 달라집니다.
-
-단계별로 쓰이는 모델과 단가(입력/출력, 100만 토큰당):
-
-| 단계 | 모델 | 단가 (입력 / 출력) |
-|------|------|------|
-| 리뷰 기본 제공자 · 인사이트 | `claude-sonnet-5` | $3 / $15 |
-| 같이 보면 좋은 논문 | 후보: SPECTER2 + BM25/RRF · 설명: `claude-sonnet-5` | 후보 검색은 로컬 · 설명 캐시 미스 시 위 Sonnet 요율로 과금 |
-| Figure 검증 (vision judge) | `claude-haiku-4-5` | $1 / $5 |
-| 타임라인 내러티브 | `claude-opus-5` (5) | $5 / $25 |
-| 분류 | — (HDBSCAN + UMAP) | **LLM 호출 0회 → $0** |
-| 검색 임베딩 | Google `gemini-embedding-001` | Google 임베딩 요금(소액) |
-
-**편당 리뷰 대략치** — 리뷰 1편은 논문 본문 발췌 + 프롬프트를 입력, 6섹션 한국어 리뷰를 출력합니다. 대략 입력 ~15k · 출력 ~4k 토큰으로 잡으면:
-
-- `15k × $3/1M + 4k × $15/1M ≈ $0.045 + $0.06 = ~$0.11`
-- 관련 논문 설명 비용은 별도입니다. 리뷰와 같은 Sonnet 5 요율을 적용하되, 쌍당 입력은 두 논문 요약 수준(약 2k 토큰)이라 논문 쌍 수·설명 캐시 적중률에 따라 달라지며 위 편당 리뷰 추정치를 그대로 적용할 수 없습니다. 유효한 설명 캐시를 재사용하면 해당 쌍의 LLM 재호출은 없습니다. Figure 검증(Haiku) 비용도 별도입니다.
-
-**월간 리뷰·타임라인 대략치** — 주간 ~20편(월 ~80편) 사이클 기준, 관련 논문 설명 비용 제외:
-
-- 리뷰: 80편 × ~$0.11 ≈ **$9**
-- 타임라인(변경된 카테고리만, Opus, 비정기) ≈ **$1–3**
-- **소계** ≈ **$10–12**. 관련 논문 설명의 캐시 미스 비용은 여기에 추가됩니다(Insights opt-in `--insights` 또는 전체 타임라인 재생성 시에도 증가).
-
-> **각주**: 분류(HDBSCAN)는 LLM을 전혀 호출하지 않으므로 비용이 없습니다. 관련 논문은 로컬 후보 검색과 유료 LLM 설명 생성을 구분합니다. Deep Research 답변 생성은 독자 BYOK라 운영자 비용에 포함되지 않습니다.
-
-## 기능
-
-**경로별 기능** — 각 기능은 독립적으로 요청하며, 기능 ID는 `pipeline/features.json`의 값입니다:
-
-| 경로 | 기능 (ID) | 설명 |
-|------|-----------|------|
-| Read | 열람 · `institution-export` · `extract` | 생성된 리뷰·검색·타임라인 열람(키 없음), 공개 기관표 내보내기, 로컬 PDF 텍스트·그림 추출 |
-| AI | **구조화 리뷰** `review` | `local_review.py`: PDF에서 텍스트/Figure 추출 → 선택한 제공자가 7개 섹션(Essence·Motivation·Achievement·How·Originality·Limitation & Further Study·Evaluation) 한국어 리뷰 작성. Limitation 아래 Data Artifacts는 [데이터 인위성 지도](https://app.jehyunlee.dev/dataartifact/) 기준으로 논문이 범할 수 있는 오류를 짚음(새로 생성·재생성되는 리뷰에만 포함, 기존 리뷰에 일괄 보강하지 않음) → HTML + 서지 사이드카. Curio Review 생성은 등록과 관련 논문 연결도 수행 |
-| AI | `summary` · `chat` · `comparison` | 선택한 PDF 본문만 근거로 **원문 인용이 붙은 주장**을 생성. 인용을 찾을 수 없는 답변은 거부. 요약·질의는 로컬 Ollama 가능 |
-| AI | **AI Chat / Citedby** | PDF와 멀티턴 대화, 인용 계보 분석 — Zotero 플러그인의 기존 기능 |
-| Collection | `keyword-search` · `semantic-search` | BM25 색인·조회(키 없음) / Gemini 임베딩 hybrid 색인·조회(Google 키) |
-| Collection | `metrics` · `bibliography-update` | 피인용·레퍼런스 누적, 서지 DB·기관 귀속 반영(기본 offline) |
-| Collection | `audio` · `timeline-text` · `timeline-image` | 기존 리뷰의 팟캐스트형 MP3(Gemini TTS), 카테고리 내러티브, PaperBanana 타임라인 그림 — 각각 따로 |
-| Collection | `zotero-sync` · `publish` · `email` | 원격 삭제 동기화(dry-run 기본), Cloudflare 배포, 기존 MP3 전달 — **모두 명시적 확인 필수** |
-
-**전체 큐레이션(고급)** — `run_full.py --mode curate`가 아래를 순서대로 실행합니다. Curio
-Review 생성은 등록된 리뷰의 관련 논문 연결만 수행하며, 나머지 전체 단계는 실행하지 않습니다:
-
-| 기능 | 설명 |
-|------|------|
-| **자동 분류** | Bottom-up 토픽 모델링(SPECTER2 + HDBSCAN + UMAP)으로 카테고리 자동 생성·배정 — LLM 호출 0회 |
-| **같이 보면 좋은 논문** | SPECTER2 코사인과 제목·저자 BM25 순위를 RRF(`k=60`)로 합쳐 카테고리가 없는 논문도 토픽별로 최대 5편의 이웃을 선택합니다. 토픽 병합·역방향 연결 후 표시 개수는 5편을 넘을 수 있습니다. 이 검색은 유지하며 LLM이 이웃을 고르지 않습니다. Anthropic Sonnet 5가 양쪽 논문의 요약(제목·날짜·저자·분류·리뷰 핵심·독창성 요약)을 비교해 공통 연구 질문·구체적인 방법 확장/차이를 설명하는 실질적인 한국어 이유를 작성합니다. 코사인 점수나 일반적인 임베딩 근접성 문구는 설명을 대신하지 않습니다. |
-| **Deep Research** | 자연어 질의 → hybrid 검색(BM25+dense) → 독자 BYOK 제공자의 답변 + `[N]` 인용 |
-| **타임라인** | 카테고리별 연구 동향 내러티브 + 다이어그램(PaperBanana) + main research timeline |
-| **지식 축적** | Obsidian 연동 — 메모가 다음 질의에 반영되는 compounding knowledge |
-| **논문 검색/등록** | arXiv·Semantic Scholar·OpenAlex 병렬 검색 + Zotero 자동 등록(선택) |
-
-관련 논문 설명에는 생성 `model`과 반대 관점에서 별도로 작성한 `reverse` 이유·근거를 보존합니다.
-새 설명은 원문 발췌나 정확한 인용을 요구하지 않으며, 이전에 원문 비교로 만든 설명은 원문이 바뀌지 않았다면
-인용(`source_quote`·`target_quote`)과 함께 그대로 재사용됩니다. `basis: embedding`과
-코사인은 검색 출처이지 의미 관계의 증거가 아닙니다. 후속 연구·반례·반박은 요약이
-직접 뒷받침하고 출판 연대와 맞을 때만 방향을 명시하며, 유사도만으로 만들지 않습니다.
-리뷰 핵심과 독창성 요약이 모두 없는 논문은 설명할 수 없어 해당 쌍을 건너뛰고, 공급자 오류는 일반적인 유사도 문구로 대체하지 않고 오류를 알립니다.
-
-**전체 큐레이션 옵션** — 플래그/모드로 켤 때만:
-
-| 옵션 | 켜는 법 | 설명 |
-|------|---------|------|
-| **콘텐츠 배포 (O-1)** | `--mode deploy` 또는 기능 `publish` | Cloudflare Workers + gh-pages 스텁 — [운영 매뉴얼](docs/operations.md#deploy-option-o-1). Audio 이메일은 별도 `email` 기능 |
-| **Insights + 네트워크 (O-2)** | `--insights` | 크로스카테고리 인사이트 + UMAP 2D/3D 인터랙티브 네트워크 재생성 |
-| **워크플로 다이어그램** | `generate_usage_diagram.py` · `generate_workflow.py` | 사용 경로·파이프라인 고양이 그림(PaperBanana, 기본 `--style cat`) · 키 없이 다시 그리려면 사용 경로 그림 `--style plain`(matplotlib) |
-
-**전체 curate 워크플로 요구사항**: Zotero 컬렉션 + PDF와 자격증명
-`ZOTERO_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`(환경변수 또는 OS 키 저장소의
-`credential:<provider>`). OpenAI는 Chat/Deep Research·Citedby 주제 필터(Decision API) 등의 선택 경로용입니다.
-
-## 파이프라인
-
-`run_full.py` 한 줄이 아래 Core 단계를 순서대로 실행합니다 (위 그림이 전체 흐름):
-
-1. **데이터 수집** — Zotero PDF → `text.md` + `figures/` (선택: arXiv·S2·OpenAlex 검색 후 Zotero 등록)
-2. **구조화 리뷰** — Claude가 6섹션 한국어 `review.md`
-3. **피인용·레퍼런스** — `citations.md`(이력 누적) + `references.md`. 기본 30일 증분, 외부 API 장애가 파이프라인을 죽이지 않는 soft step(`--skip-metrics`)
-4. **토픽 모델링 + 분류** — SPECTER2 + HDBSCAN + UMAP로 카테고리 자동 생성·배정
-5. **같이 보면 좋은 논문** — `topic_modeling.py` Step 6, `extract_insights.py` connections pass, 단일 논문 갱신(`refresh_paper_connections.py`) 모두 SPECTER2 코사인 + 제목·저자 BM25/RRF(`k=60`)로 후보를 정한 뒤, 리뷰와 같은 기본 Anthropic Sonnet 5로 양쪽 논문 요약(제목·날짜·저자·분류·리뷰 핵심·독창성 요약) 근거의 한국어 설명을 짧은 호출로 만듭니다. 생성 모델·별도 역방향 설명을 보존하고 설명 캐시(이전 원문 비교 설명 포함)를 재사용합니다. 코퍼스 전체는 `rebuild_connections.py --recompute`로 다시 계산하며, 임베딩 캐시가 있어도 설명 캐시 미스에는 유료 LLM 호출이 필요합니다.
-6. **카테고리 요약 + 타임라인 내러티브/main·category 다이어그램** & **Deep Research 검색 인덱스**(BM25 + Gemini 임베딩)
-7. **토픽 인덱스** `index.html`(Deep Research·Audio Overview 내장) → **로컬 열람**(`serve_local.py`) 또는 **배포**
-
-**브라우저 안에서**: Deep Research(키 자동 감지)와 Audio Overview(Gemini TTS → MP3)가 동작합니다.
-**Option 분기**: `--insights`(크로스카테고리 인사이트 + 네트워크) · `--mode deploy`(Cloudflare + gh-pages).
-
-## Citedby — 한 논문에서 시작하는 인용 계보 분석
-
-DOI 또는 로컬 리뷰 논문을 기준으로 OpenAlex·Scopus·Semantic Scholar·arXiv에서
-인용논문을 수집하고, 시간에 따른 연구 흐름을 자기완결 HTML 보고서로 만듭니다.
-
-```bash
-PYTHONUTF8=1 python pipeline/run_citedby.py \
-  --doi 10.xxxx/xxxxx \
-  --pdf-first --build-index --serve --open
-```
-
-- **인용 흐름 타임라인** — 연구 주제의 생성·소멸·분기·융합, turning-point 논문,
-  주요 연구 그룹을 2–3단락의 종합 narrative와 stream별 설명으로 정리
-- **PaperBanana 시각화** — 타임라인 그림과 narrative를 기본 생성
-  (`--no-timeline`으로 생략)
-- **PDF-first 근거 등급** — 기존 corpus 리뷰 > Zotero 보유 PDF 전문 > 초록 > 제목
-- **Decision API 주제 필터** — `--topic`을 주고 `OPENAI_API_KEY`가 있으면 OpenAI
-  Decision API(`gpt-6-luna`)가 논문마다 주제 관련성 확률을 매겨 0.5 이상만 남깁니다
-  (`topic_probability`). 키가 없거나 호출이 실패한 배치는 LLM JSON 판정으로 처리합니다.
-  `openai>=3.35` SDK가 필요합니다
-- **Deep(er) Research** — BM25+dense hybrid retrieval, 답변 계획, related-paper 탐색,
-  선택적 웹 검색, streaming 답변 및 `[ref:N]` 인용
-- **Corpus 우선 identity 통합** — 웹 검색 결과가 corpus 논문과 DOI·arXiv·제목으로
-  일치하면 외부 자료를 중복 인용하지 않고 기존 corpus reference를 사용
-- **문맥별 링크** — 로컬 HTML은 corpus review HTML, PDF는 DOI·arXiv·원문 URL,
-  Obsidian은 `papers/{slug}/review.md` 또는 citedby evidence note로 연결
-- **독립 출력** — Citedby 보고서와 Deep(er) Research 답변 각각
-  PDF·Markdown·Obsidian·Audio Overview 지원
-- **로컬 서버 열람** — `--serve --open`으로 `file://` 대신
-  `http://localhost:8000/...`을 열어 embedding·streaming·Audio API를 바로 사용
-
-
-**CLI/에이전트 검색** — 인덱스를 재빌드하지 않는 읽기 전용 질의 경로:
-```bash
-# Google 없이 키워드 인덱스 구축 (기존 리뷰/논문 목록 필요)
-python pipeline/build_search_index.py --topic my_topic --mode bm25
-python pipeline/query_search_index.py --topic my_topic --query "과학적 발견 자동화" --mode bm25 --json
-
-# 통합 컬렉션(_cross), API 키 없이 BM25
-python pipeline/query_search_index.py --query "과학적 발견 자동화" --mode bm25
-
-# Gemini 질의 임베딩 + BM25 RRF, 구조화 JSON 출력
-python pipeline/query_search_index.py --topic humanoid --query "VLA action tokenization" --json
-```
-기본 컬렉션은 `_cross`이며 `hybrid`·`dense`·`bm25`를 지원합니다. Python에서는
-`pipeline.api.query_search_index()`를 호출합니다. 질의는 인덱스를 변경하지 않으며,
-curate/rebuild가 인덱스를 갱신하고 deploy preflight가 fingerprint freshness를 확인합니다.
-구축은 `pipeline.api.build_search_index(..., mode="bm25")`입니다. 구축을 뜻하던
-모호한 `pipeline.api.search_index` 호환 별칭은 제거했습니다.
-
-`build_search_index.py --mode bm25`는 임베딩 API·NumPy·벡터 캐시 없이
-`_search_index.json`만 만듭니다. 선택한 토픽의 기존 인덱스 JSON은 바뀌지만 이전
-벡터 파일/캐시는 지우지 않습니다. 기본 `--mode hybrid`는 기존 Google 임베딩 경로입니다.
-`--dry-run`은 두 모드 모두 파일을 바꾸지 않는 미리보기이며 가짜 벡터를 저장하지 않습니다.
-BM25 인덱스를 사용하는 브라우저 답변도 `/api/embed`를 호출하지 않고 선택한 LLM만
-사용합니다. 키워드 일치가 없으면 근거 없는 문서를 골라 답변하지 않습니다.
-BM25 인덱스에 `dense`/`hybrid` 질의를 보내면 자동 폴백 대신 명시적으로 실패합니다.
-개인 메모와 원문 보강은 로컬 전용 토픽에 한하며 공개 토픽에는 넣지 않습니다.
-
-**검색 품질 회귀 테스트** — 8개 컬렉션의 고정 40질의·고정 Gemini query vector로
-`recall@5/10`, `MRR@10`, 실패 질의를 네트워크 없이 측정합니다. 인덱스 재빌드 뒤에는
-해당 컬렉션과 `_cross`가 baseline보다 하락하면 배포를 중단하며, macmini에서는
-`scripts/install-retrieval-eval-launchd.sh`로 매주 일요일 03:17 평가를 설치합니다.
-초기 `retrieval-v2-bootstrap`은 BM25 top-1 known-item 라벨이므로 절대 품질 점수가 아니라
-회귀 감지용입니다. 평가 자료·결정 기록은 `pipeline/eval/`에 있습니다.
-
-단계별 입력·처리·출력 상세 → **[Architecture & Internals](docs/architecture.md)**
-
-## 사용 모드
-
-단일 오케스트레이터 `run_full.py` (3축: `--mode` / `--source` / `--images`):
-
-```bash
-# 주간 운영 — 검색 → Zotero 등록 → sync → 신규 리뷰 + timeline 보강
-PYTHONUTF8=1 python pipeline/run_full.py --topic ai4s --mode curate --source web --days 7
-
-# 로컬 업데이트 — 검색 스킵, 신규/누락 narrative·timeline 기본 보강
-PYTHONUTF8=1 python pipeline/run_full.py --topic ai4s --mode curate --source zotero
-
-# timeline 보강까지 끄고 리뷰/분류만 돌리려면
-PYTHONUTF8=1 python pipeline/run_full.py --topic ai4s --mode curate --source zotero --images skip
-
-# 분류만 / 타임라인만 / 배포만
-PYTHONUTF8=1 python pipeline/run_full.py --topic ai4s --mode reclassify
-PYTHONUTF8=1 python pipeline/run_full.py --topic ai4s --mode retime --images all
-PYTHONUTF8=1 python pipeline/run_full.py --topic humanoid --mode deploy
-
-# 실행 계획 미리보기 / 로컬 서버
-PYTHONUTF8=1 python pipeline/run_full.py --topic ai4s --mode curate --dry-run
-PYTHONUTF8=1 python pipeline/serve_local.py     # localhost:8000 + /api/embed + /api/citedby-answer
-```
-
-전체 모드 표, 안전 플래그, Concurrency 튜닝, 복구 절차 → **[Operations Manual](docs/operations.md)**
-
-## 문서
-
-| 문서 | 내용 |
-|------|------|
-| **[초보자·파워유저 매뉴얼](docs/manual/index.md)** | Paper Curation + Paper Curio 간단버전·심화버전 · PaperBanana 개념도 |
-| **[기능 지도](https://tech.jehyunlee.dev/paper-curation/feature-map.html)** | 기능·파이프라인을 트리로 펼쳐 보고 클릭하면 설명·기능 ID·비용·전송 대상을 보여주는 인터랙티브 HTML (`pipeline/build_feature_map.py`로 재생성) |
-| **[서지 DB 스키마 지도](https://tech.jehyunlee.dev/paper-curation/bibliography-schema.html)** | 로컬 서지 SQLite DB의 테이블·열·관계를 탐색하는 인터랙티브 지도 · [English](https://tech.jehyunlee.dev/paper-curation/bibliography-schema.en.html) |
-| **[활용 매뉴얼](docs/user-guide.md)** | 세 가지 경로 · 설정 위치(Zotero Settings → Paper Curio) · 리뷰/모듈 단계별 실행 · 상태 메시지 해석 · FAQ |
-| **[Setup Guide](docs/setup-guide.md)** | 사전 준비 · Claude Code/수동 설치 · config.json · 설치 확인 · 문제 해결 |
-| **[Operations Manual](docs/operations.md)** | 모드/안전 플래그 · Concurrency · 한국 망 우회(SPECTER2/arXiv/로컬 fallback) · 배포(O-1) · 복구 |
-| **[Architecture & Internals](docs/architecture.md)** | 파이프라인 단계 상세 · 신뢰성 설계 · 내부 구조 · Karpathy LLM Wiki 비교 · 요구사항 |
-| **[English README](README.en.md)** | Full English documentation |
-
-## 발표/참고자료
-
-이 프로젝트는 **AAiCON 2026** (국립중앙과학관, 2026.06.25–26)에서 발표되었습니다.
-
-| 형식 | 자료 |
-|------|------|
-| **구두 발표** | [260625_이제현_AAiCon.pdf](docs/public/260625_이제현_AAiCon.pdf) |
-| **포스터** | [260625_이제현_AAiCon_poster.pdf](docs/public/260625_이제현_AAiCon_poster.pdf) |
-| **AIX 클리닉 1회** | [AIX 클리닉 1회 (KIST 존슨강당, 2026.07.16.)](docs/public/260715_AIX_clinic_paper_curation.pdf) |
+아래 1~4단계를 순서대로 하면 됩니다. 3~4단계는 **웹 화면**(5단계)에서 해도 되고, 두 방식은
+같은 설정 파일과 같은 결과 폴더를 씁니다.
 
 ---
 
-*Built with Claude Code.* 🐱
+## 1단계. 설치 (최초 1회)
+
+필요한 것: Python 3.10 이상, Node.js 18 이상
+
+```bash
+git clone https://github.com/yongbak/paper-curation.git
+cd paper-curation
+pip install -r requirements.txt          # truststore(HTTPS 인증서) + PyMuPDF(PDF 본문)
+npm install -g @anthropic-ai/claude-code # Claude Code CLI
+```
+
+이후 모든 명령은 `paper-curation` 폴더 안에서 실행합니다.
+
+## 2단계. Claude Pro 계정으로 로그인 (최초 1회)
+
+```bash
+python -m arxiv_review login
+```
+
+1. 브라우저가 열리면 **Claude Pro 구독 계정**으로 로그인하고 승인합니다.
+   (브라우저가 안 열리면 터미널에 나온 주소를 직접 열고, 받은 코드를 터미널에 붙여 넣습니다.)
+2. 끝나면 로그인 방식이 자동으로 표시됩니다. 언제든 다시 확인하려면:
+
+```bash
+python -m arxiv_review status
+```
+
+| 표시 | 의미 |
+|---|---|
+| `Login method:` 에 Claude Pro 계정이 표시되고 "구독 계정으로 로그인돼 있습니다" | 정상. 리뷰가 구독 사용량으로 처리됩니다 |
+| "구독으로 확인되지 않습니다" (예: `Claude API account`) | API 과금 계정입니다. `claude auth logout` 후 다시 `login` 하세요 |
+| "로그인돼 있지 않습니다" | `python -m arxiv_review login` 을 실행하세요 |
+
+리뷰를 시작하기 전에 도구가 이 확인을 자동으로 하고, 구독 로그인이 아니면 **리뷰를 시작하지 않습니다**.
+환경변수 `ANTHROPIC_API_KEY` 가 설정돼 있어도 리뷰 호출에서는 지우므로 API 과금으로 넘어가지 않습니다.
+
+## 3단계. 검색 주제 입력
+
+**`topic add` 명령으로 등록합니다.** 등록한 내용은 `config.json` 파일에 저장됩니다.
+
+```bash
+python -m arxiv_review topic add rag \
+  --category cs.CL --category cs.IR \
+  --keyword "retrieval augmented generation" --keyword "RAG" \
+  --exclude survey \
+  --days 7 --max 10
+```
+
+| 입력 | 뜻 | 예 |
+|---|---|---|
+| `rag` (첫 단어) | 주제 이름. 영문·숫자·`-`·`_`. 결과 폴더 이름이 됩니다 | `rag`, `llm-agents` |
+| `--category` | 검색할 arXiv 카테고리. 여러 번 쓰면 OR · [카테고리 목록](https://arxiv.org/category_taxonomy) | `cs.CL`, `cs.CV`, `q-bio.BM` |
+| `--keyword` | **찾을 주제**. 제목·초록에서 구문으로 찾습니다. 여러 번 쓰면 OR. 생략하면 카테고리 전체. 대소문자·하이픈·단수/복수는 구분하지 않습니다 | `"diffusion model"` |
+| `--exclude` | 제목·초록에 있으면 뺄 단어 | `survey` |
+| `--primary-only` | 다른 분야 논문이 cross-list 로 섞이는 것을 막고 primary 카테고리만 | |
+| `--days` / `--max` | 최근 N일 제출분 중 최신순 최대 M편 (기본 7일, 10편) | `--days 3 --max 5` |
+
+검색 조건은 **(카테고리 중 하나) AND (키워드 중 하나) AND (기간)** 입니다.
+기간은 논문이 arXiv 에 처음 제출된 날짜(v1) 기준이고, 오늘 날짜는 UTC 로 셉니다.
+예전 논문의 수정본(v2, v3 …)은 기간 안에 올라왔어도 새 논문으로 치지 않습니다.
+
+**검색 방식**: arXiv 검색 API 는 날짜·키워드가 들어간 검색을 자주 거절해서(HTTP 429), arXiv 가 메타데이터
+수집용으로 제공하는 [OAI-PMH](https://oaipmh.arxiv.org/oai?verb=Identify) 를 씁니다. 선택한 분야마다 기간 동안
+arXiv 에 반영된 기록을 받은 뒤, 처음 제출일·키워드·제외 키워드는 이 도구가 직접 거릅니다.
+분야 하나에 보통 요청 1~3번, 검색 한 번에 10~30초쯤 걸립니다. 기간이 길수록 받는 기록이 많아집니다.
+같은 이름으로 다시 `topic add` 하면 준 값만 바뀝니다 (`--category` 는 매번 필요).
+
+```bash
+python -m arxiv_review topic list          # 등록된 주제 보기
+python -m arxiv_review topic remove rag    # 주제 삭제 (만든 리뷰는 남음)
+```
+
+`config.json` 을 직접 편집해도 됩니다. 형식은 `config.example.json` 을 참고하세요.
+
+## 4단계. 실행
+
+```bash
+python -m arxiv_review run --topic rag --dry-run   # ① 검색 결과만 확인 (구독 사용량 0)
+python -m arxiv_review run --topic rag             # ② 검색 + 한국어 리뷰 + HTML
+```
+
+①로 원하는 논문이 잡히는지 보고 키워드를 조정한 뒤 ②를 실행하세요.
+
+**기간 지정**: 기본은 주제에 저장한 `days`(최근 N일)입니다. 날짜를 직접 정하려면:
+
+```bash
+python -m arxiv_review run --topic rag --from 2026-11-01 --to 2026-11-09
+```
+
+- `--from` / `--to` 는 `YYYY-MM-DD`, 양 끝 날짜를 포함합니다. `--to` 를 빼면 오늘까지입니다.
+- 최신순으로 `--max` 편까지만 가져옵니다. 기간 안에 논문이 더 있으면
+  "최대 N편에서 잘렸습니다 … 이후 것만 포함" 경고가 나옵니다. 기간 전체가 필요하면 `--max` 를 늘리세요.
+- 오늘·어제 제출된 논문은 arXiv 에 아직 발표되지 않아 나오지 않을 수 있습니다 (발표는 평일 하루 한 번).
+결과는 `output/rag/index.html` 을 브라우저로 열면 됩니다.
+
+| 파일 | 내용 |
+|---|---|
+| `output/<주제>/index.html` | 그 주제의 모든 리뷰. 검색창, 카드, 펼쳐 보는 전체 리뷰 |
+| `output/<주제>/<arxiv_id>/review.md` | 논문별 한국어 리뷰 (마크다운) |
+| `output/<주제>/<arxiv_id>/paper.json` | 메타데이터 + 리뷰 원본. 이 파일이 있으면 재실행 때 건너뜀 |
+
+등록 없이 한 번만 검색할 수도 있습니다 (결과는 `output/adhoc/`).
+
+```bash
+python -m arxiv_review run --category cs.CV --keyword "diffusion model" --days 3 --max 5
+```
+
+그 밖의 `run` 옵션: `--force` 이미 리뷰한 논문도 다시, `--no-fulltext` 초록만으로 리뷰,
+`--model opus` 모델 변경, `build --topic rag` 저장된 리뷰로 HTML 만 다시 생성.
+
+## 5단계. 웹 화면으로 쓰기 (선택)
+
+```bash
+python -m arxiv_review serve
+```
+
+브라우저에서 **http://localhost:7777** 을 엽니다. 종료는 터미널에서 `Ctrl+C`.
+
+1. **분야(arXiv 카테고리)**, **주제 키워드**(한 줄에 하나), **기간**(시작일~종료일), 최대 편수를 입력하고 **검색**
+2. 결과마다 제목·저자·Abstract 가 나옵니다. 이미 리뷰한 논문은 한국어 요약과 실험 결과가 함께 나옵니다
+3. **이 논문 리뷰** 또는 **아직 리뷰 안 된 논문 모두 리뷰** → 한 편씩 순서대로 리뷰합니다 (보통 편당 30초~2분)
+4. 리뷰가 끝나면 **한국어 요약**, **실험 결과** 가 보이고, **전체 리뷰 보기** 로 나머지 항목과 점수를 펼칩니다
+
+- 오른쪽 위 배지가 구독 로그인 상태입니다. 구독 로그인이 아니면 리뷰 버튼이 막히고 해결 방법이 나옵니다.
+- **이 조건을 주제로 저장** 은 `topic add` 와 같습니다. 저장한 주제는 터미널의 `--topic` 으로도 쓸 수 있습니다.
+- 웹에서 만든 리뷰도 `output/<주제 이름>/` 에 저장되어 터미널 실행 때 건너뜁니다.
+- 서버는 이 컴퓨터(127.0.0.1)에서만 접속됩니다. 다른 포트는 `serve --port 8080`.
+- 웹 화면은 `serve` 를 실행한 폴더의 `config.json` 과 `output/` 을 씁니다. 터미널 명령과 같은 폴더에서 실행하세요.
+
+## 6단계. Claude Code 에서 말로 시키기 (선택, skill)
+
+이 폴더에서 Claude Code 를 열고 평소 말로 요청하면 됩니다. 명령을 외울 필요가 없습니다.
+
+```bash
+cd paper-curation
+claude
+```
+
+```text
+2026-11-01부터 2026-11-09까지 arXiv 논문 중 RAG 관련 논문의 제목/저자/abstract/요약을 만들어줘
+```
+
+- 폴더 안의 `.claude/skills/arxiv-review/SKILL.md` 가 자동으로 인식됩니다. 설치할 것은 없습니다.
+- Claude 가 주제를 arXiv 카테고리와 키워드로 바꿔 검색하고, 논문마다 **본문 전체**(참고문헌 제외)를
+  끝까지 읽은 뒤 요약을 씁니다. 서론이나 초록만 보고 쓰지 않습니다.
+- 답변에는 논문별로 **제목 · 저자 · Abstract(원문) · 요약(한국어)** 이 나옵니다.
+  전체 내용은 `output/<주제>/index.html` 과 `review.md` 에 저장됩니다.
+- 4~5단계(터미널·웹)와 같은 `output/` 폴더, 같은 형식을 씁니다. 이미 만든 논문은 건너뜁니다.
+- 지금 대화 중인 Claude 가 직접 쓰므로 `claude -p` 를 따로 띄우지 않습니다.
+  사용량은 그 Claude Code 세션의 로그인 계정에서 나갑니다.
+
+| | 4~5단계 (`run`, 웹) | 6단계 (skill) |
+|---|---|---|
+| 시작 방법 | 명령 또는 버튼 | Claude Code 에 말로 요청 |
+| 읽는 분량 | 본문 앞 120,000자까지 | 본문 전체 |
+| 맞는 경우 | 여러 편 한꺼번에, 예약·무인 실행 | 10편 안팎, 결과를 대화로 바로 받기 |
+
+논문 한 편이 대화 분량을 많이 차지합니다. 10편이 넘으면 4단계 `run` 이 맞습니다.
+
+---
+
+## 리뷰는 무엇을 읽고 무엇을 쓰나
+
+- **입력**: arXiv PDF 를 받아 참고문헌을 뺀 본문을 최대 120,000자까지 읽습니다 (6단계 skill 은 전체).
+  대부분의 논문은 전체가 들어갑니다. 더 길면 앞부분만 읽고, 그 사실을 모델에게 알려
+  읽지 않은 부분을 "없다"고 단정하지 않게 합니다. 리뷰 머리말의 **리뷰 근거**에
+  본문 전체인지, 일부인지, 초록만인지 표시됩니다.
+- **출력**: Abstract(원문) · Essence(한국어 요약) · 알려진 것 · 연구 갭 · 왜 중요한가 · 접근법 · 방법론 ·
+  실험 결과(데이터셋·baseline·지표·수치) · 성과 · 독창성 · 한계와 후속 연구 · 평가(5개 항목 1~5점) · 총평.
+  서술은 한국어, 기술 용어는 원문 그대로 둡니다.
+- **방식**: 원문 문장을 그대로 뽑는 발췌가 아니라, Claude 가 읽고 한국어로 정리한 요약·분석입니다.
+  제공된 텍스트에 없는 수치는 쓰지 않도록 지시합니다.
+
+## 구독 사용량
+
+- 논문 1편 = `claude` 호출 1회 (본문 기준 대략 수만 토큰). 한 편씩 순차 처리합니다.
+- 기본 모델은 `sonnet` 입니다. Pro 구독의 사용 한도는 claude.ai 채팅과 함께 씁니다.
+  처음에는 `--max 3` 정도로 시작하세요.
+- 이미 리뷰한 논문은 건너뛰므로 재실행은 새 논문에만 사용량을 씁니다.
+- 한도에 걸리면 그 자리에서 멈춥니다. 한도가 풀린 뒤 같은 명령을 다시 실행하면 이어집니다.
+- 사용량을 더 줄이려면 `config.json` 의 `review.max_chars` 를 낮추거나 `--no-fulltext` 를 쓰세요.
+
+## 문제 해결
+
+**`CERTIFICATE_VERIFY_FAILED` (인증서 확인 실패)**
+
+arXiv 가 막은 것이 아니라, 이 컴퓨터의 Python 이 HTTPS 인증서를 확인할 목록을 찾지 못한 것입니다.
+macOS 의 python.org 설치판, 또는 보안 장비가 HTTPS 를 검사하는 회사·기관 네트워크에서 생깁니다.
+
+```bash
+pip install truststore
+```
+
+설치하면 운영체제 인증서 저장소(macOS 키체인, Windows 인증서 저장소)를 써서 해결됩니다.
+macOS python.org 설치판이면 `/Applications/Python 3.X/Install Certificates.command` 실행으로도 됩니다.
+`python -m arxiv_review status` 가 지금 쓰는 인증서 목록과 arXiv 접속 여부를 보여 줍니다.
+
+**리뷰 실패: "Input must be provided either through stdin or as a prompt argument"**
+
+한국어 Windows 에서 생기던 문제입니다. Python 이 논문 텍스트를 claude 에 넘길 때 기본 인코딩(CP949)을 써서,
+초록에 `∗` 같은 기호가 있으면 `UnicodeEncodeError` 로 넘기기가 중단됐습니다. 지금은 UTF-8 로 넘기므로
+`git pull` 후 서버를 다시 시작하면 됩니다.
+
+**"arXiv 가 요청을 잠시 제한했습니다" (HTTP 429)**
+
+arXiv 가 이 인터넷 주소에서 오는 요청을 잠시 막은 것입니다. 안내된 시간만큼 기다린 뒤 다시 검색하세요.
+웹 화면의 `503` 은 "arXiv 가 429 를 돌려줬다" 는 것을 이 서버가 브라우저에 전하는 코드입니다.
+
+이 도구 문제인지 네트워크 문제인지는 브라우저 주소창에 아래 주소를 직접 열어 보면 알 수 있습니다.
+`Rate exceeded.` 가 보이면 이 도구와 무관하게 지금 네트워크의 인터넷 주소가 arXiv 에 제한된 상태입니다.
+
+```
+https://oaipmh.arxiv.org/oai?verb=Identify
+```
+
+- 도구는 arXiv 요청 사이 3초 간격을 지키고, 연결은 한 번에 하나만 씁니다.
+- 제한에 걸리면 arXiv 가 알려 준 시간(`Retry-After`) 동안 이 프로그램 전체가 arXiv 에 요청하지 않습니다.
+  그 사이 검색하면 기다릴 시간만 알려 줍니다. 대기 중에 요청을 더 보내면 제한이 길어지기 때문입니다.
+- 웹 화면은 남은 시간을 검색 버튼에 표시하고, 시간이 지나면 버튼이 다시 켜집니다.
+  터미널은 30초·60초 기다리며 최대 3번 시도합니다.
+- 10분 안에 같은 조건으로 다시 검색하면 arXiv 에 묻지 않고 받아 둔 결과를 씁니다.
+- 회사·기관처럼 여러 사람이 같은 인터넷 주소를 쓰는 네트워크에서는, 내가 검색을 많이 하지 않아도
+  다른 사람의 요청이 함께 집계돼 제한에 걸릴 수 있습니다. 이때는 시간을 두고 다시 시도하세요.
+
+## 테스트
+
+```bash
+python -m unittest discover -s tests
+```

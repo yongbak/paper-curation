@@ -1,54 +1,8 @@
-# Paper Curation — full dependency set.
-#
-# 표준 환경은 conda env `py312` (Python 3.14 의 numba CALL_KW 비호환을 피한 단일
-# env) 입니다. 모든 단계 — 오케스트레이터·LLM·웹·PDF·HTML 은 물론 토픽 모델링/분류
-# (topic_modeling.py · classify_papers.py) 까지 이 한 env 에서 돌아갑니다.
-# umap-learn / hdbscan / sentence-transformers 는 macOS 에서 pip 보다 conda-forge
-# 가 안정적이므로, README "환경 설정" 의 conda 명령으로 env 를 만든 뒤
-# `pip install -r requirements.txt` 로 나머지를 채우는 것을 권장합니다.
-#
-# NOTE: 기존의 "py314 메인 + py312 보조" 이중 구성도 그대로 동작합니다.
-# run_update_force 가 시작 시 현재 인터프리터로 `import umap, hdbscan` 프로브를
-# 돌려, 성공하면 단일 env 로 처리하고(py312 표준), 실패하면(py314 메인 env) 토픽
-# 모델링/분류만 형제 py312 인터프리터로 자동 라우팅합니다. 이중 구성에서는
-# 클러스터링 의존성(umap-learn·hdbscan·sentence-transformers·joblib·scikit-learn·
-# numpy)이 py312 env 에 설치되어 있어야 합니다.
+# 핵심 기능은 표준 라이브러리만 사용한다 (Python 3.10+). 아래 둘은 설치를 권장한다.
 
-# --- Core: LLM / web / PDF / image ---
-anthropic
-openai>=3.35,<4  # client.decisions (Decision API) 는 3.x 부터
-google-genai
-keyring>=25.6,<26
-jsonschema>=4.23,<5
+# 운영체제 인증서 저장소로 HTTPS 를 확인한다. 없으면 macOS(python.org 설치판)나
+# 회사·기관 네트워크에서 arXiv 접속이 CERTIFICATE_VERIFY_FAILED 로 실패할 수 있다.
+truststore>=0.9
+
+# PDF 본문 추출. 없으면 초록만으로 리뷰한다.
 pymupdf
-Pillow
-requests
-pyzotero
-opendataloader-pdf
-
-# --- Audio Overview CLI fallback (generate_audio.py: PCM → MP3) ---
-lameenc
-
-# --- Slide deck export (build_slide_pptx.py) ---
-python-pptx>=1.0,<2
-
-# --- Topic modeling / classification (also required in the py312 env) ---
-numpy
-scikit-learn
-joblib
-umap-learn
-hdbscan
-sentence-transformers
-# SPECTER2 proximity adapter. Without it embeddings fall back to base/mean
-# pooling, the cache tag mismatches, and every topic is re-embedded.
-# adapters 1.3 requires transformers 4.57.
-adapters==1.3.0
-transformers==4.57.6
-
-# --- Citedby (인용논문 분석: pipeline/lib/citedby/) ---
-# 지연 import 라 citedby 를 쓰지 않으면 로드되지 않는다.
-# NOTE: Scopus 는 pybliometrics **패키지**가 아니라 그 설정 파일
-#       (~/.config/pybliometrics.cfg) 의 API 키만 읽고 requests 로 호출하므로
-#       pybliometrics 자체는 의존성이 아니다.
-pandas
-arxiv

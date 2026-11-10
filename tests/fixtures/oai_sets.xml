@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OAI-PMH xmlns="http://www.openarchives.org/OAI/2.0/">
+  <ListSets>
+    <set><setSpec>cs</setSpec><setName>Computer Science</setName></set>
+    <set><setSpec>cs:cs:AI</setSpec><setName>Artificial Intelligence</setName></set>
+    <set><setSpec>cs:cs:CL</setSpec><setName>Computation and Language</setName></set>
+    <set><setSpec>cs:cs:LG</setSpec><setName>Machine Learning</setName></set>
+    <set><setSpec>physics</setSpec><setName>Physics</setName></set>
+    <set><setSpec>physics:quant-ph</setSpec><setName>Quantum Physics</setName></set>
+    <set><setSpec>physics:cond-mat:mtrl-sci</setSpec><setName>Materials Science</setName></set>
+    <set><setSpec>stat:stat:ML</setSpec><setName>Machine Learning (stat)</setName></set>
+  </ListSets>
+</OAI-PMH>

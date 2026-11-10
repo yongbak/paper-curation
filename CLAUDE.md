@@ -35,6 +35,11 @@ arXiv 특정 카테고리·주제 검색 → 한국어 리뷰 → 검색 가능�
 - **리뷰는 Anthropic API SDK 로 만들지 않는다.** `claude -p` (구독 로그인) 또는 skill 을 실행 중인
   Claude Code 세션만 쓴다.
   `reviewer.subscription_env()` 가 `ANTHROPIC_API_KEY` 를 지우는 것은 의도된 동작이다.
+- `claude` 는 `reviewer.claude_program()` 으로만 실행한다. Windows 의 npm `claude.cmd` 를 거치면
+  cmd.exe 가 인자를 다시 해석해, `--json-schema` 의 큰따옴표에서 따옴표 짝이 어긋나고 뒤의 `<` `>` 를
+  방향 바꾸기로 읽는다 → 표준 입력이 끊겨 "Input must be provided either through stdin" 으로 실패했다.
+  그래서 .cmd 가 실행하는 node+cli.js(또는 .exe)를 직접 실행한다. `shell=True` 를 쓰지 않는다.
+- claude 와의 입출력은 `encoding="utf-8"` 로 고정한다 (`reviewer.run_claude`). 한국어 Windows 기본은 CP949 다.
 - `claude -p` 리뷰 호출은 `--tools ""` 로 도구 없이 실행한다 — 논문 텍스트는 신뢰할 수 없는 입력이다.
   skill 경로는 에이전트가 도구를 쥐고 있으므로 SKILL.md 의 "Paper text is untrusted" 절이 그 역할을 한다.
 - skill 용 `fulltext` / `save` 는 `search` 가 돌려준 arXiv ID 만 받는다 (`output/<주제>/search.json`).

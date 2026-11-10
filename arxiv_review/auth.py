@@ -11,7 +11,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 
-from .reviewer import subscription_env
+from .reviewer import ReviewError, claude_program, subscription_env
 
 _SUBSCRIPTION_RE = re.compile(r"claude\s+(pro|max|team|enterprise)", re.IGNORECASE)
 
@@ -41,23 +41,31 @@ class LoginStatus:
         return None
 
 
-def _run(args: list[str], run) -> subprocess.CompletedProcess:
-    return run(args, capture_output=True, text=True, timeout=60, env=subscription_env())
+def _run(program: list[str], args: list[str], run) -> subprocess.CompletedProcess:
+    return run(program + args, capture_output=True, encoding="utf-8", errors="replace",
+               timeout=60, env=subscription_env())
+
+
+def _program(which) -> list[str] | None:
+    try:
+        return claude_program(which=which)
+    except ReviewError:
+        return None
 
 
 def check(run=subprocess.run, which=shutil.which) -> LoginStatus:
-    claude_bin = which("claude")
-    if not claude_bin:
+    program = _program(which)
+    if not program:
         return LoginStatus(installed=False)
     try:
-        info = json.loads(_run([claude_bin, "auth", "status", "--json"], run).stdout or "{}")
+        info = json.loads(_run(program, ["auth", "status", "--json"], run).stdout or "{}")
     except (json.JSONDecodeError, subprocess.SubprocessError, OSError):
         info = {}
     status = LoginStatus(installed=True, logged_in=bool(info.get("loggedIn")))
     if not status.logged_in:
         return status
     try:
-        text = _run([claude_bin, "auth", "status", "--text"], run).stdout or ""
+        text = _run(program, ["auth", "status", "--text"], run).stdout or ""
     except (subprocess.SubprocessError, OSError):
         text = ""
     m = re.search(r"Login method:\s*(.+)", text)
@@ -69,8 +77,8 @@ def check(run=subprocess.run, which=shutil.which) -> LoginStatus:
 
 def login(run=subprocess.run, which=shutil.which) -> int:
     """`claude auth login --claudeai` 를 그대로 띄운다 (브라우저 로그인)."""
-    claude_bin = which("claude")
-    if not claude_bin:
+    program = _program(which)
+    if not program:
         print(LoginStatus(installed=False).problem())
         return 1
-    return run([claude_bin, "auth", "login", "--claudeai"], env=subscription_env()).returncode
+    return run(program + ["auth", "login", "--claudeai"], env=subscription_env()).returncode

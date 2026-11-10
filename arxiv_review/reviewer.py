@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
+from pathlib import Path
 
 API_KEY_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
 
@@ -110,9 +112,63 @@ def subscription_env(environ=None) -> dict:
     return env
 
 
-def claude_command(model: str, claude_bin: str = "claude") -> list[str]:
+# npm 이 Windows 에 만드는 claude.cmd 의 마지막 줄:
+#   ... "%_prog%"  "%dp0%\node_modules\@anthropic-ai\claude-code\cli.js" %*
+#   ... "%dp0%\some.exe"   %*          (네이티브 실행 파일일 때)
+_SHIM_TARGET_RE = re.compile(r'"%dp0%\\([^"]+?\.(?:c?js|mjs|exe))"', re.IGNORECASE)
+
+NOT_INSTALLED = ("`claude` CLI 를 찾을 수 없습니다. Claude Code 를 설치하고 "
+                 "`python -m arxiv_review login` 으로 구독 계정에 로그인하세요.")
+
+
+def resolve_cmd_shim(shim: str | Path, which=shutil.which) -> list[str]:
+    """claude.cmd 가 실행하는 실제 프로그램 → [node, cli.js] 또는 [claude.exe].
+
+    배치 파일을 거치면 cmd.exe 가 인자를 다시 해석한다. 응답 형식 JSON 의 큰따옴표에서 따옴표
+    짝이 어긋나고, 그 뒤의 '<' '>' 를 입력/출력 방향 바꾸기로 읽는다. 그 결과 claude 가 표준 입력
+    (논문 텍스트)을 받지 못했다 ("Input must be provided either through stdin ...").
+    """
+    shim = Path(shim)
+    # 마지막 것이 실행 줄이다. 앞의 `IF EXIST "%dp0%\\node.exe"` 도 같은 모양이라 첫 것을 쓰면 안 된다.
+    found = _SHIM_TARGET_RE.findall(shim.read_text(encoding="utf-8", errors="replace"))
+    target = shim.parent.joinpath(*found[-1].split("\\")) if found else None
+    if target is None or not target.exists():
+        raise ReviewError(
+            f"{shim} 가 실행하는 claude 프로그램을 찾지 못했습니다. "
+            "Claude Code 를 다시 설치하거나 네이티브 설치판(claude.exe)을 쓰세요.")
+    if target.suffix.lower() == ".exe":
+        return [str(target)]
+    bundled = shim.parent / "node.exe"
+    node = str(bundled) if bundled.exists() else which("node")
+    if not node:
+        raise ReviewError("claude 를 실행할 node 를 찾을 수 없습니다. Node.js 가 PATH 에 있어야 합니다.")
+    return [node, str(target)]
+
+
+def claude_program(which=shutil.which, windows: bool | None = None) -> list[str]:
+    """claude 를 실행할 명령 앞부분. Windows 의 .cmd 배치 파일은 거치지 않는다."""
+    windows = (os.name == "nt") if windows is None else windows
+    path = which("claude")
+    if not path:
+        raise ReviewError(NOT_INSTALLED)
+    if windows:
+        if not Path(path).suffix and Path(path + ".cmd").exists():
+            path += ".cmd"  # npm 이 함께 만드는 확장자 없는 sh 스크립트 대신 .cmd 를 본다
+        if Path(path).suffix.lower() in (".cmd", ".bat"):
+            return resolve_cmd_shim(path, which)
+    return [path]
+
+
+def run_claude(args: list[str], run=subprocess.run, **kw) -> subprocess.CompletedProcess:
+    """claude 실행. 입출력은 UTF-8 로 고정한다 — 한국어 Windows 의 기본값(CP949)으로 주고받으면
+    한국어 리뷰가 깨지고, CP949 에 없는 문자(수식 기호 등)가 있는 초록에서 오류가 난다."""
+    return run(claude_program() + args, encoding="utf-8", errors="replace",
+               env=subscription_env(), **kw)
+
+
+def claude_command(model: str) -> list[str]:
     return [
-        claude_bin, "-p",
+        "-p",
         "--model", model,
         "--output-format", "json",
         "--json-schema", json.dumps(REVIEW_SCHEMA, ensure_ascii=False),
@@ -123,28 +179,38 @@ def claude_command(model: str, claude_bin: str = "claude") -> list[str]:
     ]
 
 
+def failure_message(envelope: dict, proc) -> str:
+    """사람이 읽을 실패 이유. 응답 JSON 전체를 그대로 보여 주지 않는다."""
+    text = str(envelope.get("result") or "").strip()
+    if text:
+        return text
+    if envelope:
+        reason = str(envelope.get("subtype") or envelope.get("terminal_reason") or "원인 미상")
+        message = f"claude 가 리뷰를 끝내지 못했습니다 ({reason})"
+        if "structured" in reason or envelope.get("stop_reason") == "tool_use":
+            message += " — 모델이 리뷰 형식을 맞추지 못했습니다. sonnet 이나 opus 로 다시 시도하세요"
+        return message
+    return (proc.stderr or proc.stdout or "").strip()
+
+
 def review_paper(paper: dict, fulltext=None, *, model: str = "sonnet",
                  timeout: int = 600, run=subprocess.run) -> dict:
     """리뷰 dict 를 돌려준다. 실패 시 ReviewError / UsageLimitError."""
-    claude_bin = shutil.which("claude") or "claude"
     # 빈 임시 디렉터리에서 실행 — 이 저장소의 CLAUDE.md 가 매 호출 컨텍스트에 실리지 않게.
     with tempfile.TemporaryDirectory(prefix="arxiv-review-") as cwd:
         try:
-            proc = run(
-                claude_command(model, claude_bin), input=build_prompt(paper, fulltext),
-                capture_output=True, text=True, timeout=timeout, cwd=cwd,
-                env=subscription_env())
+            proc = run_claude(
+                claude_command(model), run=run, input=build_prompt(paper, fulltext),
+                capture_output=True, timeout=timeout, cwd=cwd)
         except FileNotFoundError as e:
-            raise ReviewError(
-                "`claude` CLI 를 찾을 수 없습니다. Claude Code 를 설치하고 "
-                "`claude` 실행 후 /login 으로 구독 계정에 로그인하세요.") from e
+            raise ReviewError(NOT_INSTALLED) from e
         except subprocess.TimeoutExpired as e:
             raise ReviewError(f"claude 응답 시간 초과({timeout}초)") from e
     try:
         envelope = json.loads(proc.stdout)
     except json.JSONDecodeError:
         envelope = {}
-    message = str(envelope.get("result") or proc.stderr or proc.stdout).strip()
+    message = failure_message(envelope, proc)
     if proc.returncode != 0 or envelope.get("is_error"):
         if any(h in message.lower() for h in _LIMIT_HINTS):
             raise UsageLimitError(message[:300])

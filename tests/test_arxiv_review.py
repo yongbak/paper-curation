@@ -299,6 +299,78 @@ class ReviewerTests(unittest.TestCase):
         self.assertIn("Tool-Using LLM Agents", kw["input"])
         self.assertNotIn("ANTHROPIC_API_KEY", kw["env"])
 
+    def test_unfinished_review_is_explained_briefly(self):
+        envelope = {"is_error": True, "subtype": "error_max_structured_output_retries",
+                    "stop_reason": "tool_use", "num_turns": 6, "usage": {"input_tokens": 8}}
+        run, _ = self.fake_run(json.dumps(envelope))
+        with self.assertRaises(reviewer.ReviewError) as cm:
+            reviewer.review_paper(self.paper, None, run=run)
+        self.assertIn("error_max_structured_output_retries", str(cm.exception))
+        self.assertIn("sonnet", str(cm.exception))
+        self.assertNotIn("usage", str(cm.exception))  # 응답 JSON 을 통째로 보여 주지 않는다
+
+    def test_review_io_is_utf8_without_shell(self):
+        """한국어 Windows 기본(CP949)이 아니라 UTF-8 로 주고받는다. 셸을 거치지 않는다."""
+        run, calls = self.fake_run(json.dumps({"is_error": False, "structured_output": REVIEW}))
+        paper = dict(self.paper, abstract="Bound ≤ ε with ∑ terms — naïve 🙂")
+        reviewer.review_paper(paper, None, run=run)
+        cmd, kw = calls[0]
+        self.assertEqual((kw["encoding"], kw["errors"]), ("utf-8", "replace"))
+        self.assertNotIn("shell", kw)
+        self.assertIn("∑ terms", kw["input"])
+        self.assertIn("--json-schema", cmd)
+
+    def _shim(self, d, fixture, with_node=False, target=True):
+        base = Path(d) / "npm"
+        base.mkdir()
+        shim = base / "claude.cmd"
+        shim.write_bytes((FIXTURES / fixture).read_bytes())
+        if target:
+            js = base / "node_modules" / "@anthropic-ai" / "claude-code" / "cli.js"
+            js.parent.mkdir(parents=True)
+            js.write_text("// cli")
+            (base / "claude.exe").write_text("MZ")
+        if with_node:
+            (base / "node.exe").write_text("MZ")
+        return base, shim
+
+    def test_windows_npm_shim_runs_node_directly(self):
+        with tempfile.TemporaryDirectory() as d:
+            base, shim = self._shim(d, "npm_claude.cmd")
+            got = reviewer.resolve_cmd_shim(shim, which=lambda n: "C:/nodejs/node.exe")
+            self.assertEqual(got, ["C:/nodejs/node.exe",
+                                   str(base / "node_modules" / "@anthropic-ai" / "claude-code" / "cli.js")])
+        with tempfile.TemporaryDirectory() as d:
+            base, shim = self._shim(d, "npm_claude.cmd", with_node=True)  # npm 옆 node.exe 우선
+            self.assertEqual(reviewer.resolve_cmd_shim(shim, which=lambda n: None)[0], str(base / "node.exe"))
+        with tempfile.TemporaryDirectory() as d:
+            base, shim = self._shim(d, "npm_native.cmd")
+            self.assertEqual(reviewer.resolve_cmd_shim(shim), [str(base / "claude.exe")])
+
+    def test_windows_shim_problems_are_explained(self):
+        with tempfile.TemporaryDirectory() as d:
+            _, shim = self._shim(d, "npm_claude.cmd", target=False)
+            with self.assertRaises(reviewer.ReviewError):
+                reviewer.resolve_cmd_shim(shim, which=lambda n: "node")
+        with tempfile.TemporaryDirectory() as d:
+            _, shim = self._shim(d, "npm_claude.cmd")
+            with self.assertRaises(reviewer.ReviewError) as cm:
+                reviewer.resolve_cmd_shim(shim, which=lambda n: None)  # node 없음
+            self.assertIn("node", str(cm.exception))
+
+    def test_claude_program_picks_the_cmd_on_windows(self):
+        with tempfile.TemporaryDirectory() as d:
+            base, shim = self._shim(d, "npm_claude.cmd")
+            (base / "claude").write_text("#!/bin/sh")  # npm 이 함께 만드는 sh 스크립트
+            for found in (str(shim), str(base / "claude")):
+                got = reviewer.claude_program(
+                    which=lambda n, f=found: f if n == "claude" else "node", windows=True)
+                self.assertTrue(got[1].endswith("cli.js"), got)
+            self.assertEqual(reviewer.claude_program(which=lambda n: "/usr/bin/claude", windows=False),
+                             ["/usr/bin/claude"])
+        with self.assertRaises(reviewer.ReviewError):
+            reviewer.claude_program(which=lambda n: None)
+
     def test_subscription_env_strips_api_credentials(self):
         env = reviewer.subscription_env(
             {"ANTHROPIC_API_KEY": "x", "ANTHROPIC_AUTH_TOKEN": "y", "HOME": "/h"})

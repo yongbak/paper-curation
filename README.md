@@ -211,6 +211,11 @@ pip install truststore
 macOS python.org 설치판이면 `/Applications/Python 3.X/Install Certificates.command` 실행으로도 됩니다.
 `python -m arxiv_review status` 가 지금 쓰는 인증서 목록과 arXiv 접속 여부를 보여 줍니다.
 
+**리뷰 실패: "Input must be provided either through stdin or as a prompt argument"**
+
+Windows 에서 npm 으로 설치한 Claude Code(`claude.cmd`)를 거칠 때 생기던 문제입니다. 지금은 `claude.cmd` 를
+거치지 않고 그 안의 프로그램을 직접 실행하므로 `git pull` 후 서버를 다시 시작하면 됩니다.
+
 **"arXiv 가 요청을 잠시 제한했습니다" (HTTP 429)**
 
 arXiv 가 이 인터넷 주소에서 오는 요청을 잠시 막은 것입니다. 안내된 시간만큼 기다린 뒤 다시 검색하세요.

@@ -8,7 +8,7 @@ import urllib.parse
 from pathlib import Path
 from types import SimpleNamespace
 
-from arxiv_review import arxiv, auth, cli, render, reviewer
+from arxiv_review import arxiv, auth, cli, net, render, reviewer
 from arxiv_review.fulltext import FullText
 from arxiv_review.config import ConfigError, Topic, load_config
 
@@ -100,6 +100,69 @@ class FeedTests(unittest.TestCase):
         # until 만 주면 그날로부터 days 일 전
         self.assertEqual(arxiv.date_window(topic(days=3), until=dt.date(2026, 11, 5)),
                          (dt.date(2026, 11, 2), dt.date(2026, 11, 5)))
+
+    def test_rate_limit_becomes_clear_error(self):
+        import io
+        import urllib.error
+        from unittest import mock
+
+        def limited(*a, **k):
+            raise urllib.error.HTTPError("u", 429, "Too Many Requests", {}, io.BytesIO())
+        waits = []
+        with mock.patch.object(arxiv.urllib.request, "urlopen", limited), \
+                mock.patch.object(arxiv.time, "sleep", waits.append), \
+                mock.patch.object(arxiv, "throttle", lambda: None):
+            with self.assertRaises(arxiv.RateLimited) as cm:
+                arxiv._fetch("https://export.arxiv.org/api/query")
+        self.assertIn("1~2분 뒤", str(cm.exception))
+        self.assertEqual(waits, [30, 60])  # 일반 오류(10, 20초)보다 길게 기다린다
+
+    def test_certificate_error_is_explained_without_retry(self):
+        import ssl
+        import urllib.error
+        from unittest import mock
+
+        def bad_cert(*a, **k):
+            raise urllib.error.URLError(ssl.SSLCertVerificationError(
+                1, "certificate verify failed: unable to get local issuer certificate"))
+        waits = []
+        with mock.patch.object(arxiv.urllib.request, "urlopen", bad_cert), \
+                mock.patch.object(arxiv.time, "sleep", waits.append), \
+                mock.patch.object(arxiv, "throttle", lambda: None):
+            with self.assertRaises(net.CertificateProblem) as cm:
+                arxiv._fetch("https://export.arxiv.org/api/query")
+        self.assertIn("pip install truststore", str(cm.exception))
+        self.assertEqual(waits, [])  # 인증서 문제는 다시 시도해도 같다
+
+    def test_trust_source_order(self):
+        import builtins
+        import sys
+        from unittest import mock
+        real_import = builtins.__import__
+
+        def without(*names):
+            def fake(name, *a, **k):
+                if name in names:
+                    raise ImportError(name)
+                return real_import(name, *a, **k)
+            return fake
+
+        def source(env, missing=()):
+            net._build.cache_clear()
+            with mock.patch.dict("os.environ", env, clear=True), \
+                    mock.patch.dict(sys.modules, {m: None for m in missing}), \
+                    mock.patch.object(builtins, "__import__", without(*missing)):
+                try:
+                    return net.trust_source()
+                finally:
+                    net._build.cache_clear()
+        self.assertIn("SSL_CERT_FILE", source({"SSL_CERT_FILE": "/x.pem"}))
+        self.assertIn("기본", source({}, missing=("truststore", "certifi")))
+        try:
+            import certifi  # noqa: F401
+            self.assertIn("certifi", source({}, missing=("truststore",)))
+        except ImportError:
+            pass
 
     def test_paper_dirname_rejects_paths(self):
         self.assertEqual(render.paper_dirname("hep-th/9901001"), "hep-th_9901001")

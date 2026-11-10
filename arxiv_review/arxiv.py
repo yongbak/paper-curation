@@ -16,6 +16,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 
 from .config import Topic
+from .net import CERT_HELP, ArxivUnavailable, CertificateProblem, is_certificate_error, ssl_context
 
 API_URL = "https://export.arxiv.org/api/query"
 USER_AGENT = "arxiv-review/1.0 (personal paper curation script)"
@@ -111,15 +112,26 @@ def _fetch(url: str, retries: int = 3) -> bytes:
         try:
             throttle()
             req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-            with urllib.request.urlopen(req, timeout=60) as resp:
+            with urllib.request.urlopen(req, timeout=60, context=ssl_context()) as resp:
                 return resp.read()
         except (urllib.error.URLError, TimeoutError) as e:
+            if is_certificate_error(e):  # 다시 시도해도 같다 — 바로 해결 방법을 보여 준다
+                raise CertificateProblem(CERT_HELP) from e
+            limited = isinstance(e, urllib.error.HTTPError) and e.code in (429, 503)
             if attempt == retries - 1:
+                if limited:
+                    raise RateLimited(
+                        "arXiv 가 요청을 잠시 제한했습니다 (짧은 시간에 검색이 많았음). "
+                        "1~2분 뒤 다시 시도하세요.") from e
                 raise
-            wait = 10 * (attempt + 1)
+            wait = (30 if limited else 10) * (attempt + 1)
             print(f"  arXiv 요청 실패({e}), {wait}초 후 재시도", file=sys.stderr)
             time.sleep(wait)
     raise AssertionError("unreachable")
+
+
+class RateLimited(ArxivUnavailable):
+    """arXiv 가 요청을 일시 제한했다 (HTTP 429/503)."""
 
 
 @dataclass

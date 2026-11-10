@@ -175,6 +175,13 @@ def cmd_login(args, config: Config) -> int:
 
 
 def cmd_status(args, config: Config) -> int:
+    from . import net
+    print(f"arXiv 연결: 인증서 목록 = {net.trust_source()}")
+    try:
+        arxiv._fetch(arxiv.API_URL + "?search_query=cat:cs.AI&max_results=1", retries=1)
+        print("  arXiv 접속 정상")
+    except OSError as e:
+        print(f"  arXiv 접속 실패: {e}", file=sys.stderr)
     status = auth.check()
     problem = status.problem()
     if status.logged_in:

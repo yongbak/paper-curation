@@ -67,6 +67,17 @@ details.opts .grid{margin-top:10px}
 animation:sp 1s linear infinite}@keyframes sp{to{transform:rotate(360deg)}}
 .progress{height:6px;background:var(--soft);border-radius:999px;overflow:hidden;margin-top:6px}
 .progress div{height:100%;background:var(--accent);width:0;transition:width .3s}
+fieldset.cats{border:1px solid var(--line);border-radius:10px;padding:10px 14px 14px;margin:0;min-width:0}
+fieldset.cats legend{padding:0 6px;font-size:.85rem}
+.cat-group{margin-top:8px}
+.cat-group h4{margin:0 0 4px;font-size:.78rem;color:var(--muted);font-weight:600}
+.cat-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:2px 12px}
+.cat-list label{display:flex;gap:6px;align-items:baseline;font-size:.86rem;cursor:pointer;padding:3px 0;min-width:0}
+.cat-list input{width:auto;flex:none;margin:0;transform:translateY(2px)}
+.cat-list code{font-size:.8rem;color:var(--muted);white-space:nowrap}
+.cat-list span{word-break:keep-all;overflow-wrap:anywhere}
+fieldset.cats .other{margin-top:12px}
+fieldset.cats.invalid{border-color:var(--err)}
 .empty{text-align:center;color:var(--muted);padding:40px 0}
 @media(max-width:640px){.grid{grid-template-columns:1fr}.card{padding:14px}}
 </style>
@@ -87,10 +98,15 @@ animation:sp 1s linear infinite}@keyframes sp{to{transform:rotate(360deg)}}
     <label class="f">주제 이름 <span class="hint">결과 저장 폴더 이름 (영문·숫자·-·_)</span>
       <input id="topic" value="web" required pattern="[A-Za-z0-9][A-Za-z0-9_\-]*">
     </label>
-    <label class="f full"><b>분야 (arXiv 카테고리)</b>
-      <input id="categories" list="catlist" placeholder="cs.CL, cs.AI" required>
-      <span class="hint">쉼표로 여러 개 (OR). 목록: <a href="https://arxiv.org/category_taxonomy" target="_blank" rel="noopener">arxiv.org/category_taxonomy</a></span>
-    </label>
+    <fieldset class="full cats" id="catBox">
+      <legend><b>분야 (arXiv 카테고리)</b> <span class="hint" id="catCount">0개 선택</span></legend>
+      <div id="catGroups"></div>
+      <label class="f other">목록에 없는 분야 직접 입력
+        <input id="catOther" placeholder="예: astro-ph.GA, math.ST">
+        <span class="hint">쉼표로 여러 개. 선택한 분야 중 하나에만 속해도 검색됩니다 (OR).
+          전체 목록: <a href="https://arxiv.org/category_taxonomy" target="_blank" rel="noopener">arxiv.org/category_taxonomy</a></span>
+      </label>
+    </fieldset>
     <label class="f full"><b>주제 키워드</b>
       <textarea id="keywords" placeholder="retrieval augmented generation&#10;LLM agent"></textarea>
       <span class="hint">한 줄에 하나 (OR). 제목·초록에서 구문으로 찾습니다. 비우면 분야 전체</span>
@@ -132,12 +148,6 @@ animation:sp 1s linear infinite}@keyframes sp{to{transform:rotate(360deg)}}
 <div id="results"></div>
 </div>
 
-<datalist id="catlist">
-  <option value="cs.AI"><option value="cs.CL"><option value="cs.CV"><option value="cs.LG"><option value="cs.IR">
-  <option value="cs.RO"><option value="cs.MA"><option value="cs.SE"><option value="cs.CR"><option value="cs.HC">
-  <option value="stat.ML"><option value="q-bio.BM"><option value="q-bio.QM"><option value="physics.comp-ph">
-  <option value="cond-mat.mtrl-sci"><option value="eess.AS"><option value="eess.IV"><option value="math.OC">
-</datalist>
 
 <template id="paperTpl">
   <article class="card paper">
@@ -157,6 +167,53 @@ const SECTIONS = [["known","알려진 것"],["gap","연구 갭"],["why","왜 중
   ["how","방법론"],["achievement","성과"],["originality","독창성"],["limitation","한계와 후속 연구"],["verdict","총평"]];
 const SCORE_LABELS = {novelty:"Novelty",technical:"Technical",significance:"Significance",clarity:"Clarity",overall:"Overall"};
 let topics = {}, current = null, jobTimer = null, jobId = null;
+const CATEGORY_GROUPS = [
+  ["컴퓨터과학", [["cs.AI","인공지능"],["cs.CL","자연어처리"],["cs.LG","기계학습"],["cs.CV","컴퓨터 비전"],
+    ["cs.CR","보안·암호"],["cs.IR","정보검색"],["cs.MA","멀티에이전트"],["cs.RO","로보틱스"],
+    ["cs.SE","소프트웨어공학"],["cs.HC","인간-컴퓨터 상호작용"],["cs.DB","데이터베이스"],
+    ["cs.DC","분산·병렬 컴퓨팅"],["cs.NE","신경·진화 컴퓨팅"],["cs.SI","소셜·정보 네트워크"],
+    ["cs.CY","컴퓨터와 사회"],["cs.PL","프로그래밍 언어"]]],
+  ["통계·수학", [["stat.ML","통계적 기계학습"],["stat.ME","통계 방법론"],["math.OC","최적화·제어"],["math.ST","통계 이론"]]],
+  ["전기·신호", [["eess.AS","오디오·음성"],["eess.IV","영상·비디오 처리"],["eess.SP","신호처리"],["eess.SY","시스템·제어"]]],
+  ["생명과학", [["q-bio.BM","생체분자"],["q-bio.QM","정량적 방법"],["q-bio.NC","신경과학"],["q-bio.GN","유전체학"]]],
+  ["물리·재료", [["physics.comp-ph","계산물리"],["cond-mat.mtrl-sci","재료과학"],["quant-ph","양자물리"],["physics.chem-ph","화학물리"]]],
+  ["경제·금융", [["econ.EM","계량경제"],["q-fin.CP","계산 금융"]]],
+];
+const KNOWN_CATS = new Set(CATEGORY_GROUPS.flatMap(([, list]) => list.map(([code]) => code)));
+
+function buildCategoryBoxes() {
+  const root = $("catGroups");
+  for (const [group, list] of CATEGORY_GROUPS) {
+    const g = document.createElement("div"); g.className = "cat-group";
+    const h = document.createElement("h4"); h.textContent = group;
+    const l = document.createElement("div"); l.className = "cat-list";
+    for (const [code, name] of list) {
+      const lab = document.createElement("label");
+      const cb = document.createElement("input"); cb.type = "checkbox"; cb.name = "cat"; cb.value = code;
+      const c = document.createElement("code"); c.textContent = code;
+      const n = document.createElement("span"); n.textContent = name;
+      lab.append(cb, c, n); l.append(lab);
+    }
+    g.append(h, l); root.append(g);
+  }
+  root.addEventListener("change", updateCatCount);
+  $("catOther").addEventListener("input", updateCatCount);
+}
+function selectedCategories() {
+  const checked = [...document.querySelectorAll('input[name="cat"]:checked')].map((c) => c.value);
+  const other = $("catOther").value.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
+  return [...new Set([...checked, ...other])];
+}
+function setCategories(list) {
+  document.querySelectorAll('input[name="cat"]').forEach((c) => c.checked = list.includes(c.value));
+  $("catOther").value = list.filter((c) => !KNOWN_CATS.has(c)).join(", ");
+  updateCatCount();
+}
+function updateCatCount() {
+  const n = selectedCategories().length;
+  $("catCount").textContent = n ? `${n}개 선택: ${selectedCategories().join(", ")}` : "하나 이상 선택하세요";
+  $("catBox").classList.toggle("invalid", n === 0);
+}
 
 async function api(path, body) {
   const opt = body === undefined ? {} : {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)};
@@ -173,7 +230,7 @@ function setDays(n, today) {
 }
 
 function formBody() {
-  return {topic:$("topic").value.trim(), categories:$("categories").value, keywords:$("keywords").value,
+  return {topic:$("topic").value.trim(), categories:selectedCategories(), keywords:$("keywords").value,
     exclude:$("exclude").value, primary_only:$("primary").checked, date_from:$("from").value,
     date_to:$("to").value, max:$("max").value,
     days: Math.max(1, Math.round((new Date($("to").value) - new Date($("from").value)) / 864e5) || 7)};
@@ -207,7 +264,7 @@ async function loadTopics(select) {
 }
 function applyTopic(name) {
   const t = topics[name]; $("delBtn").hidden = !t; if (!t) return;
-  $("topic").value = name; $("categories").value = t.categories.join(", ");
+  $("topic").value = name; setCategories(t.categories);
   $("keywords").value = t.keywords.join("\n"); $("exclude").value = t.exclude_keywords.join(", ");
   $("primary").checked = t.primary_category_only; $("max").value = t.max_papers;
   setDays(t.days);
@@ -341,6 +398,10 @@ function finishJob(job) {
 
 $("form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
+  if (!selectedCategories().length) {
+    updateCatCount(); show($("formMsg"), "분야(arXiv 카테고리)를 하나 이상 선택하세요.", "err");
+    $("catBox").scrollIntoView({block: "center"}); return;
+  }
   const btn = $("searchBtn"); btn.disabled = true; btn.textContent = "검색 중…";
   show($("formMsg"), "");
   try { renderResults(await api("/api/search", formBody())); }
@@ -366,6 +427,7 @@ $("delBtn").onclick = async () => {
   try { await api("/api/topics/delete", {topic:name}); await loadTopics(""); show($("formMsg"), `주제 '${name}' 를 삭제했습니다.`); }
   catch (e) { show($("formMsg"), e.message, "err"); }
 };
+buildCategoryBoxes(); updateCatCount(); setDays(7);
 loadStatus(); loadTopics().catch((e) => show($("formMsg"), e.message, "err"));
 </script>
 </body>

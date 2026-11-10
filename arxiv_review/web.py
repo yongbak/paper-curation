@@ -230,6 +230,7 @@ class App:
     def _run_job(self, job_id, papers, opts, force, output_dir, description) -> None:
         topic_name = self.jobs[job_id]["topic"]
         self._set(job_id, state="running")
+        final = {"state": "done"}
         for i, paper in enumerate(papers):
             existing = None if force else service.load_entry(output_dir, topic_name, paper["arxiv_id"])
             if existing:
@@ -246,15 +247,15 @@ class App:
                 with self.lock:
                     for item in self.jobs[job_id]["items"][i:]:
                         item.update(status="held", message="구독 사용 한도 — 나중에 다시 리뷰하세요")
-                self._set(job_id, state="stopped", message=f"구독 사용 한도에 도달했습니다: {e}")
+                final = {"state": "stopped", "message": f"구독 사용 한도에 도달했습니다: {e}"}
                 break
             except reviewer.ReviewError as e:
                 self._set(job_id, i, status="error", message=str(e))
                 continue
             self._set(job_id, i, status="done", message="", review=entry_for_client(entry))
-        else:
-            self._set(job_id, state="done")
+        # 결과 HTML 을 먼저 만들고 나서 끝났다고 알린다 (반대로 하면 화면이 '완료' 인데 파일이 없다)
         service.rebuild_index(output_dir, topic_name, description)
+        self._set(job_id, **final)
 
 
 def make_handler(app: App, port: int):
@@ -298,6 +299,8 @@ def make_handler(app: App, port: int):
                 self._json(e.status, {"error": str(e), **e.extra})
             except ConfigError as e:
                 self._json(HTTPStatus.BAD_REQUEST, {"error": str(e)})
+            except arxiv.ArxivUnavailable as e:  # 429 제한, 인증서 문제 — 안내문을 그대로
+                self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(e)})
             except OSError as e:  # arXiv 네트워크 오류 등
                 self._json(HTTPStatus.BAD_GATEWAY, {"error": f"네트워크 오류: {e}"})
 

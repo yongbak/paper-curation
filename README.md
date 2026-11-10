@@ -19,7 +19,7 @@ API 요금은 나가지 않습니다.
 ```bash
 git clone https://github.com/yongbak/paper-curation.git
 cd paper-curation
-pip install -r requirements.txt          # PDF 본문 리뷰용 PyMuPDF
+pip install -r requirements.txt          # truststore(HTTPS 인증서) + PyMuPDF(PDF 본문)
 npm install -g @anthropic-ai/claude-code # Claude Code CLI
 ```
 
@@ -157,6 +157,26 @@ python -m arxiv_review serve
 - 이미 리뷰한 논문은 건너뛰므로 재실행은 새 논문에만 사용량을 씁니다.
 - 한도에 걸리면 그 자리에서 멈춥니다. 한도가 풀린 뒤 같은 명령을 다시 실행하면 이어집니다.
 - 사용량을 더 줄이려면 `config.json` 의 `review.max_chars` 를 낮추거나 `--no-fulltext` 를 쓰세요.
+
+## 문제 해결
+
+**`CERTIFICATE_VERIFY_FAILED` (인증서 확인 실패)**
+
+arXiv 가 막은 것이 아니라, 이 컴퓨터의 Python 이 HTTPS 인증서를 확인할 목록을 찾지 못한 것입니다.
+macOS 의 python.org 설치판, 또는 보안 장비가 HTTPS 를 검사하는 회사·기관 네트워크에서 생깁니다.
+
+```bash
+pip install truststore
+```
+
+설치하면 운영체제 인증서 저장소(macOS 키체인, Windows 인증서 저장소)를 써서 해결됩니다.
+macOS python.org 설치판이면 `/Applications/Python 3.X/Install Certificates.command` 실행으로도 됩니다.
+`python -m arxiv_review status` 가 지금 쓰는 인증서 목록과 arXiv 접속 여부를 보여 줍니다.
+
+**"arXiv 가 요청을 잠시 제한했습니다" (HTTP 429)**
+
+짧은 시간에 검색을 많이 하면 arXiv 가 잠시 막습니다. 1~2분 뒤 다시 시도하세요.
+도구는 요청 사이 3초 간격을 지키고, 제한에 걸리면 30초·60초 기다렸다 다시 시도합니다.
 
 ## 테스트
 

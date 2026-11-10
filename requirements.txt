@@ -1,3 +1,8 @@
-# 핵심 기능은 표준 라이브러리만 사용한다 (Python 3.10+).
-# 선택: 설치하면 초록 대신 PDF 본문 전체로 리뷰한다.
+# 핵심 기능은 표준 라이브러리만 사용한다 (Python 3.10+). 아래 둘은 설치를 권장한다.
+
+# 운영체제 인증서 저장소로 HTTPS 를 확인한다. 없으면 macOS(python.org 설치판)나
+# 회사·기관 네트워크에서 arXiv 접속이 CERTIFICATE_VERIFY_FAILED 로 실패할 수 있다.
+truststore>=0.9
+
+# PDF 본문 추출. 없으면 초록만으로 리뷰한다.
 pymupdf

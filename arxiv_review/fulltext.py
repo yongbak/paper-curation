@@ -7,6 +7,7 @@ import urllib.request
 from dataclasses import dataclass
 
 from .arxiv import USER_AGENT, throttle
+from .net import ssl_context
 
 _REFERENCES_RE = re.compile(r"\n\s*(references|bibliography)\s*\n", re.IGNORECASE)
 
@@ -63,7 +64,7 @@ def fetch_fulltext(paper: dict, max_chars: int) -> FullText | None:
     try:
         throttle()
         req = urllib.request.Request(paper["pdf_url"], headers={"User-Agent": USER_AGENT})
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with urllib.request.urlopen(req, timeout=120, context=ssl_context()) as resp:
             data = resp.read()
         return extract(data, max_chars)
     except Exception as e:  # 네트워크·깨진 PDF — 초록으로 계속 진행

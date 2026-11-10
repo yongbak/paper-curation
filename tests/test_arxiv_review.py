@@ -13,7 +13,24 @@ from arxiv_review import arxiv, auth, cli, net, render, reviewer
 from arxiv_review.fulltext import FullText
 from arxiv_review.config import ConfigError, Topic, load_config
 
-FEED = (Path(__file__).parent / "fixtures" / "feed.xml").read_bytes()
+FIXTURES = Path(__file__).parent / "fixtures"
+SETS = (FIXTURES / "oai_sets.xml").read_bytes()
+PAGE1 = (FIXTURES / "oai_page1.xml").read_bytes()
+PAGE2 = (FIXTURES / "oai_page2.xml").read_bytes()
+EMPTY = (FIXTURES / "oai_empty.xml").read_bytes()
+# 2611.01234, 2611.05678, 2605.20555(5월 논문의 11월 수정본), 2611.07777, hep-th/9901001
+PAPERS = arxiv.parse_records(PAGE1)[0] + arxiv.parse_records(PAGE2)[0]
+
+
+def fake_oai(urls=None):
+    """URL 에 따라 분야 목록 / 1쪽 / 2쪽을 돌려주는 가짜 fetch."""
+    def fetch(url):
+        if urls is not None:
+            urls.append(url)
+        if "verb=ListSets" in url:
+            return SETS
+        return PAGE2 if "resumptionToken" in url else PAGE1
+    return fetch
 REVIEW = {k: f"{k} 에 대한 충분히 긴 한국어 서술입니다." for k in reviewer.TEXT_FIELDS}
 REVIEW.update({k: 4 for k in reviewer.SCORE_FIELDS})
 REVIEW["achievement"] = "1. **정확도**: 12% 향상\n2. **속도**: `2x` 개선"
@@ -26,17 +43,6 @@ def topic(**kw):
 
 
 class QueryTests(unittest.TestCase):
-    def test_query_combines_category_keyword_and_date(self):
-        q = arxiv.build_query(topic(), dt.date(2026, 11, 3), dt.date(2026, 11, 10))
-        self.assertEqual(
-            q, '(cat:cs.CL OR cat:cs.AI) AND (ti:"LLM agent" OR abs:"LLM agent") '
-               'AND submittedDate:[202611030000 TO 202611102359]')
-
-    def test_no_keywords_means_whole_category(self):
-        q = arxiv.build_query(topic(keywords=[]), dt.date(2026, 1, 1), dt.date(2026, 1, 2))
-        self.assertNotIn("ti:", q)
-        self.assertTrue(q.startswith("(cat:cs.CL OR cat:cs.AI) AND submittedDate"))
-
     def test_bad_category_and_quote_rejected(self):
         with self.assertRaises(ConfigError):
             topic(categories=["cs.CL OR all:x"])
@@ -45,65 +51,104 @@ class QueryTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             topic(categories=[])
 
+    def test_category_to_oai_set(self):
+        sets = arxiv.list_sets(lambda url: SETS)
+        arxiv.reset_state()
+        self.assertEqual(arxiv.set_for_category("cs.AI", sets), "cs:cs:AI")
+        self.assertEqual(arxiv.set_for_category("quant-ph", sets), "physics:quant-ph")
+        self.assertEqual(arxiv.set_for_category("cond-mat.mtrl-sci", sets), "physics:cond-mat:mtrl-sci")
+        self.assertEqual(arxiv.set_for_category("stat.ML", sets), "stat:stat:ML")
+        with self.assertRaises(ValueError) as cm:
+            arxiv.set_for_category("cs.XX", sets)
+        self.assertIn("arXiv 에 없는 분야", str(cm.exception))
+
+    def test_phrase_matching_ignores_case_hyphen_plural(self):
+        words = arxiv.tokens("Grounded Retrieval-Augmented Generation for LLM-Agents")
+        self.assertTrue(arxiv.contains_phrase(words, "retrieval augmented generation"))
+        self.assertTrue(arxiv.contains_phrase(words, "LLM agent"))
+        self.assertTrue(arxiv.contains_phrase(words, "llm agents"))
+        self.assertFalse(arxiv.contains_phrase(words, "agent llm"))       # 순서가 다르면 아님
+        self.assertFalse(arxiv.contains_phrase(words, "augmented retrieval"))
+        self.assertFalse(arxiv.contains_phrase(arxiv.tokens("ragged"), "RAG"))  # 단어 일부는 아님
+        self.assertTrue(arxiv.contains_phrase(arxiv.tokens("Loss functions"), "loss"))  # loss 는 los 가 아님
+
 
 class FeedTests(unittest.TestCase):
-    def test_parse(self):
-        papers = arxiv.parse_feed(FEED)
+    def setUp(self):
+        arxiv.reset_state()
+        self.addCleanup(arxiv.reset_state)
+
+    def test_parse_records(self):
+        papers, token = arxiv.parse_records(PAGE1)
+        self.assertEqual(token, "tok-page-2")
         self.assertEqual([p["arxiv_id"] for p in papers],
-                         ["2611.01234", "2611.05678", "hep-th/9901001"])
+                         ["2611.01234", "2611.05678", "2605.20555"])  # 삭제된 기록은 빠진다
         p = papers[0]
         self.assertEqual(p["title"], "Tool-Using LLM Agents for Scientific Discovery")
         self.assertEqual(p["abstract"], "We study LLM agent tool use. Results improve by 12%.")
         self.assertEqual(p["authors"], ["Alice Kim", "Bob Lee"])
-        self.assertEqual((p["published"], p["version"], p["primary_category"]),
-                         ("2026-11-05", "v2", "cs.CL"))
+        self.assertEqual((p["published"], p["updated"], p["version"], p["primary_category"]),
+                         ("2026-11-05", "2026-11-06", "v2", "cs.CL"))
         self.assertEqual(p["categories"], ["cs.CL", "cs.AI"])
+        self.assertEqual(p["comment"], "12 pages")
         self.assertEqual(p["pdf_url"], "https://arxiv.org/pdf/2611.01234")
+        # 수정본: 최근 버전은 11월이지만 처음 제출일(v1)은 5월
+        self.assertEqual(papers[2]["published"], "2026-05-18")
+        self.assertEqual(papers[2]["authors"], ["Dana Choi", "Eli Jung", "Fay Han"])
+        self.assertEqual(arxiv.parse_records(PAGE2)[1], None)
+        self.assertEqual(arxiv.parse_records(EMPTY), ([], None))
+        with self.assertRaises(arxiv.ArxivError):
+            arxiv.parse_records(b'<OAI-PMH xmlns="http://www.openarchives.org/OAI/2.0/">'
+                                b'<error code="badArgument">bad</error></OAI-PMH>')
 
     def test_filters(self):
-        papers = arxiv.parse_feed(FEED)[:2]
-        self.assertEqual(len(arxiv.apply_filters(papers + papers, topic())), 2)
-        only = arxiv.apply_filters(papers, topic(primary_category_only=True))
-        self.assertEqual([p["arxiv_id"] for p in only], ["2611.01234"])
-        no_survey = arxiv.apply_filters(papers, topic(exclude_keywords=["Survey"]))
-        self.assertEqual([p["arxiv_id"] for p in no_survey], ["2611.01234"])
+        t = topic()
+        kept = arxiv.apply_filters(PAPERS + PAPERS, t)
+        self.assertEqual([p["arxiv_id"] for p in kept],
+                         ["2611.01234", "2611.05678", "2605.20555", "2611.07777"])  # 중복·분야 밖 제외
+        only = arxiv.apply_filters(PAPERS, topic(primary_category_only=True))
+        self.assertEqual([p["arxiv_id"] for p in only], ["2611.01234", "2605.20555", "2611.07777"])
+        no_survey = arxiv.apply_filters(PAPERS, topic(exclude_keywords=["Surveys"]))
+        self.assertNotIn("2611.05678", [p["arxiv_id"] for p in no_survey])
+        dated = arxiv.apply_filters(PAPERS, t, dt.date(2026, 11, 1), dt.date(2026, 11, 6))
+        self.assertEqual([p["arxiv_id"] for p in dated], ["2611.01234", "2611.05678"])
+        rag = arxiv.apply_filters(PAPERS, topic(keywords=["retrieval-augmented generation"]))
+        self.assertEqual([p["arxiv_id"] for p in rag], ["2611.07777"])
+        everything = arxiv.apply_filters(PAPERS, topic(keywords=[]))
+        self.assertEqual(len(everything), 4)
 
-    def test_search_requests_expected_url_and_limits(self):
-        urls = []
-
-        def fetch(url):
-            urls.append(url)
-            return FEED
-
-        result = arxiv.search_detailed(topic(max_papers=1, days=7),
-                                       today=dt.date(2026, 11, 10), fetch=fetch)
-        got = result.papers
-        self.assertEqual(len(got), 1)
-        self.assertTrue(result.more_available)  # 2편이 맞는데 1편만 가져왔다
-        self.assertEqual(result.oldest, "2026-11-05")
-        params = urllib.parse.parse_qs(urllib.parse.urlparse(urls[0]).query)
-        self.assertIn("submittedDate:[202611030000 TO 202611102359]",
-                      params["search_query"][0])
-        self.assertEqual(params["sortBy"], ["submittedDate"])
-        self.assertEqual(params["max_results"], ["2"])  # 1편을 원하면 2편만 묻는다 (더 있는지 확인용 1편)
-        self.assertEqual(len(urls), 1)  # 한 페이지가 꽉 차지 않으면 더 요청하지 않는다
-
-
-    def test_page_size_follows_request(self):
-        self.assertEqual(arxiv.page_size_for(topic(), 1), 2)
-        self.assertEqual(arxiv.page_size_for(topic(), 10), 11)
-        self.assertEqual(arxiv.page_size_for(topic(exclude_keywords=["survey"]), 10), 33)
-        self.assertEqual(arxiv.page_size_for(topic(primary_category_only=True), 1), 6)
-        self.assertEqual(arxiv.page_size_for(topic(), 200), arxiv.PAGE_SIZE)
-
-    def test_explicit_date_range(self):
+    def test_search_harvests_filters_and_sorts(self):
         urls = []
         result = arxiv.search_detailed(
-            topic(), since=dt.date(2026, 11, 1), until=dt.date(2026, 11, 5),
-            fetch=lambda u: urls.append(u) or FEED)
-        self.assertIn("submittedDate:[202611010000 TO 202611052359]",
-                      urllib.parse.unquote_plus(urls[0]))
+            topic(max_papers=1), since=dt.date(2026, 11, 1), until=dt.date(2026, 11, 8),
+            today=dt.date(2026, 11, 10), fetch=fake_oai(urls))
+        self.assertEqual([p["arxiv_id"] for p in result.papers], ["2611.07777"])  # 최신 제출순
+        self.assertTrue(result.more_available)
+        self.assertEqual(result.oldest, "2026-11-07")
+        self.assertEqual(result.scanned, 10)   # 두 분야 × 두 쪽 × 기록 5개 (중복 포함)
+        self.assertIn("verb=ListSets", urls[0])
+        first = urllib.parse.parse_qs(urllib.parse.urlparse(urls[1]).query)
+        self.assertEqual(first["metadataPrefix"], ["arXivRaw"])
+        self.assertEqual(first["set"], ["cs:cs:CL"])
+        # 반영 지연만큼 뒤까지 받되 오늘을 넘지 않는다
+        self.assertEqual((first["from"], first["until"]), (["2026-11-01"], ["2026-11-10"]))
+        self.assertIn("resumptionToken=tok-page-2", urls[2])
+        self.assertEqual(len(urls), 5)  # 분야 목록 1 + (분야 2개 × 2쪽)
+
+    def test_search_full_window(self):
+        result = arxiv.search_detailed(
+            topic(max_papers=10), since=dt.date(2026, 11, 1), until=dt.date(2026, 11, 8),
+            today=dt.date(2026, 11, 10), fetch=fake_oai())
+        self.assertEqual([p["arxiv_id"] for p in result.papers],
+                         ["2611.07777", "2611.01234", "2611.05678"])  # 5월 논문 수정본은 빠진다
         self.assertFalse(result.more_available)
+
+    def test_unknown_category_is_reported(self):
+        with self.assertRaises(ValueError):
+            arxiv.search_detailed(topic(categories=["cs.XX"]), today=dt.date(2026, 11, 10),
+                                  fetch=fake_oai())
+
+    def test_explicit_date_range(self):
         with self.assertRaises(ValueError):
             arxiv.date_window(topic(), since=dt.date(2026, 11, 5), until=dt.date(2026, 11, 1))
         # until 만 주면 그날로부터 days 일 전
@@ -168,7 +213,7 @@ class FeedTests(unittest.TestCase):
 
         def ok(*a, **k):
             calls.append(1)
-            return mock.MagicMock(__enter__=lambda s: io.BytesIO(FEED), __exit__=lambda *x: False)
+            return mock.MagicMock(__enter__=lambda s: io.BytesIO(PAGE1), __exit__=lambda *x: False)
         with self._patched(ok, []):
             first = arxiv._fetch("https://export.arxiv.org/api/query?d")
             second = arxiv._fetch("https://export.arxiv.org/api/query?d")
@@ -232,7 +277,7 @@ class FeedTests(unittest.TestCase):
 
 
 class ReviewerTests(unittest.TestCase):
-    paper = arxiv.parse_feed(FEED)[0]
+    paper = PAPERS[0]
 
     def fake_run(self, stdout, returncode=0, stderr=""):
         calls = []
@@ -297,7 +342,7 @@ class RenderTests(unittest.TestCase):
         self.assertIn("<p>문단</p>", html_out)
 
     def test_review_markdown_and_index(self):
-        paper = arxiv.parse_feed(FEED)[0]
+        paper = PAPERS[0]
         meta = {"basis": "abstract", "model": "sonnet", "reviewed_at": "2026-11-10"}
         md = render.review_markdown(paper, REVIEW, meta)
         self.assertIn("# Tool-Using LLM Agents for Scientific Discovery", md)
@@ -420,7 +465,7 @@ class CliTests(unittest.TestCase):
         saved = (arxiv.search_detailed, reviewer.review_paper)
         calls = []
         arxiv.search_detailed = lambda t, **kw: arxiv.SearchResult(
-            arxiv.parse_feed(FEED)[:1], kw["since"], kw["until"], True)
+            PAPERS[:1], kw["since"], kw["until"], True)
         reviewer.review_paper = lambda *a, **k: calls.append(1) or dict(REVIEW)
         try:
             with tempfile.TemporaryDirectory() as d:
@@ -445,7 +490,7 @@ class CliTests(unittest.TestCase):
         from arxiv_review import fulltext, service
         saved = (arxiv.search_detailed, fulltext.fetch_fulltext, fulltext.pymupdf_available)
         arxiv.search_detailed = lambda t, **kw: arxiv.SearchResult(
-            arxiv.parse_feed(FEED)[:1], dt.date(2026, 11, 1), dt.date(2026, 11, 5), True)
+            PAPERS[:1], dt.date(2026, 11, 1), dt.date(2026, 11, 5), True)
         body = "본문 첫 줄\n" + "실험 결과 " * 400
         seen = []
         fulltext.fetch_fulltext = lambda paper, max_chars: seen.append(max_chars) or FullText(
@@ -539,7 +584,7 @@ class WebTests(unittest.TestCase):
                         (auth, "check", auth.check),
                         (service, "review_and_save", service.review_and_save)]
         arxiv.search_detailed = lambda t, **kw: arxiv.SearchResult(
-            arxiv.apply_filters(arxiv.parse_feed(FEED), t)[:t.max_papers],
+            arxiv.apply_filters(PAPERS, t)[:t.max_papers],
             kw.get("since") or dt.date(2026, 11, 3), kw.get("until") or dt.date(2026, 11, 10), False)
         auth.check = lambda: auth.LoginStatus(True, True, "Claude Pro Account", True)
         real_save = self.patches[2][2]
@@ -597,7 +642,8 @@ class WebTests(unittest.TestCase):
             "topic": "web", "categories": "cs.CL, cs.AI", "keywords": "LLM agent",
             "exclude": "survey", "date_from": "2026-11-01", "date_to": "2026-11-09", "max": 5})
         self.assertEqual(status, 200, data)
-        self.assertEqual([r["paper"]["arxiv_id"] for r in data["results"]], ["2611.01234", "hep-th/9901001"])
+        self.assertEqual([r["paper"]["arxiv_id"] for r in data["results"]],
+                         ["2611.01234", "2605.20555", "2611.07777"])
         self.assertEqual((data["since"], data["until"]), ("2026-11-01", "2026-11-09"))
         self.assertIsNone(data["results"][0]["review"])
         status, job = self.call("/api/review", {"topic": "web", "ids": ["2611.01234"]})
@@ -654,6 +700,14 @@ class WebTests(unittest.TestCase):
         self.call("/api/status")
         self.call("/api/status")
         self.assertEqual(len(calls), 3)  # 로그인 안 된 상태는 매번 다시 확인
+
+    def test_unknown_category_is_a_clear_400(self):
+        def unknown(*a, **k):
+            raise ValueError("arXiv 에 없는 분야입니다: 'cs.XX'")
+        arxiv.search_detailed = unknown
+        status, data = self.call("/api/search", {"categories": "cs.XX"})
+        self.assertEqual(status, 400)
+        self.assertIn("없는 분야", data["error"])
 
     def test_rate_limit_reports_wait_time(self):
         def limited(*a, **k):

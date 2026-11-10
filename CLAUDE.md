@@ -7,7 +7,7 @@ arXiv 특정 카테고리·주제 검색 → 한국어 리뷰 → 검색 가능�
 | 파일 | 역할 |
 |---|---|
 | `arxiv_review/config.py` | `config.json` 로딩·검증. 토픽 = 카테고리 + 키워드 |
-| `arxiv_review/arxiv.py` | arXiv API 검색식 생성, Atom 파싱, 후처리 필터 |
+| `arxiv_review/arxiv.py` | OAI-PMH(arXivRaw) 수집, 분야→set 변환, 제출일·키워드 로컬 필터, 요청 간격·429 대기·캐시 |
 | `arxiv_review/net.py` | HTTPS 인증서 목록 선택 (환경변수 → truststore → certifi → 기본), 인증서 오류 안내 |
 | `arxiv_review/fulltext.py` | PDF 본문 추출 (PyMuPDF 선택 의존성, 없으면 초록만) |
 | `arxiv_review/reviewer.py` | `claude -p` 호출로 구조화된 한국어 리뷰 생성 |
@@ -42,6 +42,11 @@ arXiv 특정 카테고리·주제 검색 → 한국어 리뷰 → 검색 가능�
 - skill 경로는 본문을 자르지 않는다. 끝까지 읽지 못했으면 `save --read-chars` 로 읽은 분량을 남겨
   리뷰 근거가 "본문 앞 N자" 로 표시되게 한다.
 - `reviewer.REVIEW_SCHEMA` 의 필드를 바꾸면 SKILL.md 의 "Summary format" 표도 함께 고친다.
+- 검색은 OAI-PMH 로 한다. arXiv 검색 API(export.arxiv.org/api/query)는 날짜·키워드·여러 분야가
+  들어간 검색식을 네트워크에 따라 429 로 거절했다 (단순 `cat:cs.AI` 만 통과). 되돌리지 않는다.
+- 처음 제출일은 arXivRaw 의 v1 날짜다. arXiv 형식의 `<created>` 는 최근 버전 날짜라서 쓰면
+  예전 논문의 수정본이 새 논문으로 섞인다. 수집 범위는 기간 끝 + `ANNOUNCE_LAG_DAYS` 까지.
+- 키워드 일치는 `arxiv.contains_phrase` (소문자·하이픈·단수/복수 무시, 단어 순서 유지) 하나만 쓴다.
 - arXiv 요청은 3초 간격을 지킨다 (`arxiv.REQUEST_INTERVAL`).
 - 429 를 받으면 `Retry-After` 동안 프로세스 전체가 arXiv 에 요청하지 않는다 (`_cooldown_until`).
   제한을 피하려고 User-Agent 를 바꾸거나 우회하지 않는다. 웹은 기다리지 않고 남은 시간을 돌려준다.

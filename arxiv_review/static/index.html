@@ -315,6 +315,7 @@ function renderResults(data) {
   const bar = document.createElement("div"); bar.className = "summary-bar";
   const h = document.createElement("h2");
   h.textContent = `${data.results.length}편 · ${data.since} ~ ${data.until} · ${data.description}`;
+  h.title = `arXiv 기록 ${data.scanned.toLocaleString()}건을 살펴봤습니다`;
   const btn = document.createElement("button"); btn.className = "primary"; btn.id = "reviewAll";
   btn.textContent = "아직 리뷰 안 된 논문 모두 리뷰"; btn.disabled = !!jobId;
   bar.append(h, btn); root.append(bar);

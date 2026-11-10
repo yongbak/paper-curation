@@ -90,9 +90,12 @@ def cmd_run(args, config: Config) -> int:
     except ValueError as e:
         raise ConfigError(str(e)) from e
     print(f"[검색] {describe(topic)} · {since} ~ {until} · 최대 {topic.max_papers}편")
-    result = arxiv.search_detailed(topic, since=since, until=until)
+    try:
+        result = arxiv.search_detailed(topic, since=since, until=until, log=print)
+    except ValueError as e:  # arXiv 에 없는 분야
+        raise ConfigError(str(e)) from e
     papers = result.papers
-    print(f"  {len(papers)}편 발견")
+    print(f"  arXiv 기록 {result.scanned:,}건 중 조건에 맞는 {len(papers)}편")
     if result.more_available:
         print(f"  ※ 최대 {topic.max_papers}편에서 잘렸습니다. 기간 안에 논문이 더 있지만 "
               f"{result.oldest} 이후 것만 포함됩니다. 기간 전체를 보려면 --max 를 늘리세요.")
@@ -294,7 +297,7 @@ def cmd_status(args, config: Config) -> int:
     from . import net
     print(f"arXiv 연결: 인증서 목록 = {net.trust_source()}")
     try:
-        arxiv._fetch(arxiv.API_URL + "?search_query=cat:cs.AI&max_results=1", retries=1)
+        arxiv._fetch(arxiv.OAI_URL + "?verb=Identify", retries=1)
         print("  arXiv 접속 정상")
     except OSError as e:
         print(f"  arXiv 접속 실패: {e}", file=sys.stderr)

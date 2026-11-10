@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OAI-PMH xmlns="http://www.openarchives.org/OAI/2.0/">
+  <ListRecords>
+    <record>
+      <header><identifier>oai:arXiv.org:2611.01234</identifier><datestamp>2026-11-06</datestamp>
+        <setSpec>cs:cs:CL</setSpec><setSpec>cs:cs:AI</setSpec></header>
+      <metadata>
+        <arXivRaw xmlns="http://arxiv.org/OAI/arXivRaw/">
+          <id>2611.01234</id>
+          <version version="v1"><date>Thu, 05 Nov 2026 09:00:00 GMT</date><size>500kb</size></version>
+          <version version="v2"><date>Fri, 06 Nov 2026 10:00:00 GMT</date><size>510kb</size></version>
+          <title>Tool-Using LLM Agents
+  for Scientific Discovery</title>
+          <authors>Alice Kim and Bob Lee (Tongji Univ., China)</authors>
+          <categories>cs.CL cs.AI</categories>
+          <comments>12 pages</comments>
+          <abstract>  We study LLM agent tool use.
+  Results improve by 12%.</abstract>
+        </arXivRaw>
+      </metadata>
+    </record>
+    <record>
+      <header><identifier>oai:arXiv.org:2611.05678</identifier><datestamp>2026-11-05</datestamp>
+        <setSpec>cs:cs:LG</setSpec></header>
+      <metadata>
+        <arXivRaw xmlns="http://arxiv.org/OAI/arXivRaw/">
+          <id>2611.05678</id>
+          <version version="v1"><date>Wed, 04 Nov 2026 10:00:00 GMT</date></version>
+          <title>A Survey of LLM Agent Benchmarks</title>
+          <authors>Carol Park</authors>
+          <categories>cs.LG cs.CL</categories>
+          <abstract>This survey covers benchmarks.</abstract>
+        </arXivRaw>
+      </metadata>
+    </record>
+    <record>
+      <header><identifier>oai:arXiv.org:2605.20555</identifier><datestamp>2026-11-07</datestamp>
+        <setSpec>cs:cs:AI</setSpec></header>
+      <metadata>
+        <arXivRaw xmlns="http://arxiv.org/OAI/arXivRaw/">
+          <id>2605.20555</id>
+          <version version="v1"><date>Mon, 18 May 2026 08:00:00 GMT</date></version>
+          <version version="v2"><date>Sat, 07 Nov 2026 08:00:00 GMT</date></version>
+          <title>An Older Paper Revised in November</title>
+          <authors>Dana Choi, Eli Jung, and Fay Han</authors>
+          <categories>cs.AI</categories>
+          <abstract>Revisiting LLM agents with a new version.</abstract>
+        </arXivRaw>
+      </metadata>
+    </record>
+    <record>
+      <header status="deleted"><identifier>oai:arXiv.org:2611.00001</identifier><datestamp>2026-11-06</datestamp></header>
+    </record>
+    <resumptionToken cursor="0" completeListSize="5">tok-page-2</resumptionToken>
+  </ListRecords>
+</OAI-PMH>

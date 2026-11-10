@@ -62,7 +62,7 @@ The command prints JSON. Each entry in `papers` has `arxiv_id`, `title`,
 - If `more_available` is true, the period holds more papers than `--max` and only
   those submitted on or after `oldest_included` were returned. Tell the user and
   ask whether to raise `--max`.
-- Papers from the last one or two days may not be in the arXiv search API yet.
+- Papers submitted today or yesterday may not be announced on arXiv yet (arXiv announces once per weekday).
 
 ### 3. Summarize each paper, one at a time
 

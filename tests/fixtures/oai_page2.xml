@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OAI-PMH xmlns="http://www.openarchives.org/OAI/2.0/">
+  <ListRecords>
+    <record>
+      <header><identifier>oai:arXiv.org:2611.07777</identifier><datestamp>2026-11-09</datestamp>
+        <setSpec>cs:cs:AI</setSpec></header>
+      <metadata>
+        <arXivRaw xmlns="http://arxiv.org/OAI/arXivRaw/">
+          <id>2611.07777</id>
+          <version version="v1"><date>Sat, 07 Nov 2026 22:30:00 GMT</date></version>
+          <title>Grounded Retrieval-Augmented Generation</title>
+          <authors>Gil Seo</authors>
+          <categories>cs.AI</categories>
+          <abstract>Retrieval augmented generation for LLM-agents.</abstract>
+        </arXivRaw>
+      </metadata>
+    </record>
+    <record>
+      <header><identifier>oai:arXiv.org:hep-th/9901001</identifier><datestamp>2026-11-06</datestamp>
+        <setSpec>physics:hep-th</setSpec></header>
+      <metadata>
+        <arXivRaw xmlns="http://arxiv.org/OAI/arXivRaw/">
+          <id>hep-th/9901001</id>
+          <version version="v1"><date>Fri, 01 Jan 1999 00:00:00 GMT</date></version>
+          <title>Old style identifier</title>
+          <authors>Dan Choi</authors>
+          <categories>hep-th</categories>
+          <abstract>Legacy id form.</abstract>
+        </arXivRaw>
+      </metadata>
+    </record>
+    <resumptionToken cursor="3" completeListSize="5"/>
+  </ListRecords>
+</OAI-PMH>

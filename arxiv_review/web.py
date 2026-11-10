@@ -175,9 +175,13 @@ class App:
         except ValueError as e:
             raise BadRequest(str(e)) from None
         # 웹은 429 에 기다리지 않는다 — 화면이 몇 분씩 멈추는 대신 남은 시간을 바로 알려 준다
-        result = arxiv.search_detailed(
-            topic, since=since, until=until,
-            fetch=lambda url: arxiv._fetch(url, retries=1, wait_on_limit=False))
+        try:
+            result = arxiv.search_detailed(
+                topic, since=since, until=until,
+                fetch=lambda url: arxiv._fetch(url, retries=1, wait_on_limit=False),
+                log=lambda msg: sys.stderr.write(msg + "\n"))
+        except ValueError as e:  # arXiv 에 없는 분야
+            raise BadRequest(str(e)) from None
         cfg = self.config()
         with self.lock:
             for p in result.papers:
@@ -189,6 +193,7 @@ class App:
             "since": result.since.isoformat(), "until": result.until.isoformat(),
             "more_available": result.more_available, "oldest": result.oldest,
             "max": topic.max_papers,
+            "scanned": result.scanned,
             "results": [{"paper": p, "review": entry_for_client(
                 service.load_entry(cfg.output_dir, topic.name, p["arxiv_id"]))}
                 for p in result.papers],

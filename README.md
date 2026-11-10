@@ -66,13 +66,19 @@ python -m arxiv_review topic add rag \
 |---|---|---|
 | `rag` (첫 단어) | 주제 이름. 영문·숫자·`-`·`_`. 결과 폴더 이름이 됩니다 | `rag`, `llm-agents` |
 | `--category` | 검색할 arXiv 카테고리. 여러 번 쓰면 OR · [카테고리 목록](https://arxiv.org/category_taxonomy) | `cs.CL`, `cs.CV`, `q-bio.BM` |
-| `--keyword` | **찾을 주제**. 제목·초록에서 구문으로 찾습니다. 여러 번 쓰면 OR. 생략하면 카테고리 전체 | `"diffusion model"` |
+| `--keyword` | **찾을 주제**. 제목·초록에서 구문으로 찾습니다. 여러 번 쓰면 OR. 생략하면 카테고리 전체. 대소문자·하이픈·단수/복수는 구분하지 않습니다 | `"diffusion model"` |
 | `--exclude` | 제목·초록에 있으면 뺄 단어 | `survey` |
 | `--primary-only` | 다른 분야 논문이 cross-list 로 섞이는 것을 막고 primary 카테고리만 | |
 | `--days` / `--max` | 최근 N일 제출분 중 최신순 최대 M편 (기본 7일, 10편) | `--days 3 --max 5` |
 
 검색 조건은 **(카테고리 중 하나) AND (키워드 중 하나) AND (기간)** 입니다.
 기간은 논문이 arXiv 에 처음 제출된 날짜(v1) 기준이고, 오늘 날짜는 UTC 로 셉니다.
+예전 논문의 수정본(v2, v3 …)은 기간 안에 올라왔어도 새 논문으로 치지 않습니다.
+
+**검색 방식**: arXiv 검색 API 는 날짜·키워드가 들어간 검색을 자주 거절해서(HTTP 429), arXiv 가 메타데이터
+수집용으로 제공하는 [OAI-PMH](https://oaipmh.arxiv.org/oai?verb=Identify) 를 씁니다. 선택한 분야마다 기간 동안
+arXiv 에 반영된 기록을 받은 뒤, 처음 제출일·키워드·제외 키워드는 이 도구가 직접 거릅니다.
+분야 하나에 보통 요청 1~3번, 검색 한 번에 10~30초쯤 걸립니다. 기간이 길수록 받는 기록이 많아집니다.
 같은 이름으로 다시 `topic add` 하면 준 값만 바뀝니다 (`--category` 는 매번 필요).
 
 ```bash
@@ -100,7 +106,7 @@ python -m arxiv_review run --topic rag --from 2026-11-01 --to 2026-11-09
 - `--from` / `--to` 는 `YYYY-MM-DD`, 양 끝 날짜를 포함합니다. `--to` 를 빼면 오늘까지입니다.
 - 최신순으로 `--max` 편까지만 가져옵니다. 기간 안에 논문이 더 있으면
   "최대 N편에서 잘렸습니다 … 이후 것만 포함" 경고가 나옵니다. 기간 전체가 필요하면 `--max` 를 늘리세요.
-- 최근 1~2일 논문은 arXiv 검색 API 에 아직 반영되지 않았을 수 있습니다.
+- 오늘·어제 제출된 논문은 arXiv 에 아직 발표되지 않아 나오지 않을 수 있습니다 (발표는 평일 하루 한 번).
 결과는 `output/rag/index.html` 을 브라우저로 열면 됩니다.
 
 | 파일 | 내용 |
@@ -214,10 +220,10 @@ arXiv 가 이 인터넷 주소에서 오는 요청을 잠시 막은 것입니다
 `Rate exceeded.` 가 보이면 이 도구와 무관하게 지금 네트워크의 인터넷 주소가 arXiv 에 제한된 상태입니다.
 
 ```
-https://export.arxiv.org/api/query?search_query=cat:cs.AI&max_results=1
+https://oaipmh.arxiv.org/oai?verb=Identify
 ```
 
-- 검색 한 번은 보통 arXiv 요청 1번입니다. 도구는 요청 사이 3초 간격을 지킵니다.
+- 도구는 arXiv 요청 사이 3초 간격을 지키고, 연결은 한 번에 하나만 씁니다.
 - 제한에 걸리면 arXiv 가 알려 준 시간(`Retry-After`) 동안 이 프로그램 전체가 arXiv 에 요청하지 않습니다.
   그 사이 검색하면 기다릴 시간만 알려 줍니다. 대기 중에 요청을 더 보내면 제한이 길어지기 때문입니다.
 - 웹 화면은 남은 시간을 검색 버튼에 표시하고, 시간이 지나면 버튼이 다시 켜집니다.

@@ -1,6 +1,16 @@
-"""arXiv API 검색 — 카테고리 AND 주제 키워드 AND 제출일 범위.
+"""arXiv 검색 — OAI-PMH 로 분야별 기록을 받아, 제출일·키워드는 직접 거른다.
 
-arXiv 이용 규칙: 요청 간 3초 간격, 식별 가능한 User-Agent.
+arXiv 검색 API(export.arxiv.org/api/query)는 날짜 범위·키워드·여러 분야가 들어간 검색식을
+네트워크에 따라 'Rate exceeded.'(429)로 거절했다. 단순한 `cat:cs.AI` 만 통과했다.
+그래서 arXiv 가 메타데이터 수집용으로 제공하는 OAI-PMH 를 쓴다.
+
+- 분야마다 `set=cs:cs:AI` 처럼 요청한다. 교차 등록(cs.LG 가 주 분야이고 cs.AI 도 단 논문)도 들어 있다.
+- OAI 의 날짜(datestamp)는 기록이 바뀐 날이다 (새 논문 반영, 수정본 등록 모두). 그래서 arXivRaw
+  형식의 버전 이력에서 v1 날짜를 처음 제출일로 쓰고, 그 날짜로 기간을 거른다. 반영은 제출보다
+  1~3일 늦으므로 기간 끝에서 ANNOUNCE_LAG_DAYS 일 뒤까지 받는다.
+- 키워드는 제목·초록에서 구문으로 찾는다. 대소문자·하이픈·단수/복수 차이는 무시한다.
+
+arXiv 이용 규칙: 요청 간 3초 간격, 연결 하나씩, 식별 가능한 User-Agent.
 """
 from __future__ import annotations
 
@@ -10,84 +20,140 @@ import re
 import sys
 import threading
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from email.utils import parsedate_to_datetime
 
 from .config import Topic
 from .net import CERT_HELP, ArxivUnavailable, CertificateProblem, is_certificate_error, ssl_context
 
-API_URL = "https://export.arxiv.org/api/query"
+OAI_URL = "https://oaipmh.arxiv.org/oai"
 USER_AGENT = "arxiv-review/1.0 (personal paper curation script)"
-PAGE_SIZE = 100
 REQUEST_INTERVAL = 3.0
-ATOM = "{http://www.w3.org/2005/Atom}"
+ANNOUNCE_LAG_DAYS = 4      # 제출 → arXiv 반영까지 (주말 포함 최대 사흘 남짓)
+MAX_PAGES_PER_SET = 50     # 안전장치: 한 분야에서 이 이상 페이지를 넘기지 않는다
 # 2611.01234 (신형) / hep-th/9901001, math.AG/0101001 (구형)
 ARXIV_ID_RE = re.compile(r"^(\d{4}\.\d{4,5}|[a-z\-]+(\.[A-Z]{2})?/\d{7})$")
-ARXIV = "{http://arxiv.org/schemas/atom}"
+OAI = "{http://www.openarchives.org/OAI/2.0/}"
+RAW = "{http://arxiv.org/OAI/arXivRaw/}"
 
 
-def build_query(topic: Topic, since: dt.date, until: dt.date) -> str:
-    """`(cat:A OR cat:B) AND (ti:"k" OR abs:"k" ...) AND submittedDate:[..]`."""
-    cats = " OR ".join(f"cat:{c}" for c in topic.categories)
-    parts = [f"({cats})"]
-    if topic.keywords:
-        kws = " OR ".join(f'ti:"{k}" OR abs:"{k}"' for k in topic.keywords)
-        parts.append(f"({kws})")
-    parts.append(
-        f"submittedDate:[{since:%Y%m%d}0000 TO {until:%Y%m%d}2359]")
-    return " AND ".join(parts)
+class ArxivError(ArxivUnavailable):
+    """OAI-PMH 가 오류를 돌려줬다 (잘못된 인자 등)."""
 
 
-def _text(entry, tag: str) -> str:
-    el = entry.find(tag)
-    return " ".join((el.text or "").split()) if el is not None else ""
+def _text(el, tag: str) -> str:
+    found = el.find(tag)
+    return " ".join((found.text or "").split()) if found is not None else ""
 
 
-def parse_feed(xml_data: bytes) -> list[dict]:
-    """Atom 응답 → 논문 dict 목록."""
+def _version_date(version_el) -> str:
+    """'Thu, 05 Nov 2026 07:34:20 GMT' → '2026-11-05' (UTC)."""
+    raw = _text(version_el, f"{RAW}date")
+    try:
+        return parsedate_to_datetime(raw).astimezone(dt.timezone.utc).date().isoformat()
+    except (TypeError, ValueError):
+        return ""
+
+
+def split_authors(raw: str) -> list[str]:
+    """'A, B and C (MIT, USA)' → ['A', 'B', 'C']. 괄호 속 소속은 버린다."""
+    depth, plain = 0, []
+    for ch in raw:  # 괄호가 겹쳐도 바깥 괄호까지 지운다
+        depth += ch == "("
+        if depth == 0:
+            plain.append(ch)
+        depth -= ch == ")" and depth > 0
+    names = re.split(r",\s*(?:and\s+)?|\s+and\s+", "".join(plain))
+    return [" ".join(n.split()) for n in names if n.strip()]
+
+
+def parse_records(xml_data: bytes) -> tuple[list[dict], str | None]:
+    """ListRecords(arXivRaw) 응답 → (논문 dict 목록, 다음 페이지 resumptionToken).
+
+    arXiv 형식의 <created> 는 '최근 버전' 날짜다 — 예전 논문의 수정본이 새 논문처럼 보인다.
+    arXivRaw 는 버전마다 날짜가 있어 v1(처음 제출일)을 정확히 안다.
+    """
     root = ET.fromstring(xml_data)
+    error = root.find(f"{OAI}error")
+    if error is not None:
+        if error.get("code") == "noRecordsMatch":  # 그 기간에 반영된 기록이 없음
+            return [], None
+        raise ArxivError(f"arXiv OAI-PMH 오류 ({error.get('code')}): {(error.text or '').strip()}")
     papers = []
-    for entry in root.findall(f"{ATOM}entry"):
-        raw_id = _text(entry, f"{ATOM}id")
-        if "/abs/" not in raw_id:
-            continue  # 오류 entry
-        versioned = raw_id.split("/abs/")[-1]
-        arxiv_id = re.sub(r"v\d+$", "", versioned)
-        primary = entry.find(f"{ARXIV}primary_category")
+    for record in root.iter(f"{OAI}record"):
+        header = record.find(f"{OAI}header")
+        if header is not None and header.get("status") == "deleted":
+            continue
+        meta = record.find(f"{OAI}metadata/{RAW}arXivRaw")
+        if meta is None:
+            continue
+        versions = meta.findall(f"{RAW}version")
+        if not versions:
+            continue
+        arxiv_id = _text(meta, f"{RAW}id")
+        categories = _text(meta, f"{RAW}categories").split()
         papers.append({
             "arxiv_id": arxiv_id,
-            "version": versioned[len(arxiv_id):],
-            "title": _text(entry, f"{ATOM}title"),
-            "abstract": _text(entry, f"{ATOM}summary"),
-            "authors": [
-                _text(a, f"{ATOM}name") for a in entry.findall(f"{ATOM}author")],
-            "published": _text(entry, f"{ATOM}published")[:10],
-            "updated": _text(entry, f"{ATOM}updated")[:10],
-            "primary_category": primary.get("term", "") if primary is not None else "",
-            "categories": [
-                c.get("term", "") for c in entry.findall(f"{ATOM}category")],
-            "comment": _text(entry, f"{ARXIV}comment"),
+            "version": versions[-1].get("version", ""),
+            "title": _text(meta, f"{RAW}title"),
+            "abstract": _text(meta, f"{RAW}abstract"),
+            "authors": split_authors(_text(meta, f"{RAW}authors")),
+            "published": _version_date(versions[0]),   # v1 제출일
+            "updated": _version_date(versions[-1]),    # 최근 버전 제출일
+            "primary_category": categories[0] if categories else "",
+            "categories": categories,
+            "comment": _text(meta, f"{RAW}comments"),
             "abs_url": f"https://arxiv.org/abs/{arxiv_id}",
             "pdf_url": f"https://arxiv.org/pdf/{arxiv_id}",
         })
-    return papers
+    token_el = root.find(f"{OAI}ListRecords/{OAI}resumptionToken")
+    token = (token_el.text or "").strip() if token_el is not None else ""
+    return papers, token or None
 
 
-def apply_filters(papers: list[dict], topic: Topic) -> list[dict]:
-    """API 가 못 거르는 조건: primary 카테고리 한정, 제외 키워드, 중복."""
+def _stem(word: str) -> str:
+    # agents → agent, poisonings → poisoning. 'ss' 로 끝나는 말(loss, class)은 그대로.
+    return word[:-1] if len(word) > 3 and word.endswith("s") and not word.endswith("ss") else word
+
+
+def tokens(text: str) -> list[str]:
+    """비교용 단어 목록: 소문자, 악센트 제거, 영숫자만 (하이픈·구두점은 띄어쓰기로)."""
+    text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().lower()
+    return [_stem(w) for w in re.findall(r"[a-z0-9]+", text)]
+
+
+def contains_phrase(text_tokens: list[str], phrase: str) -> bool:
+    """phrase 의 단어들이 같은 순서로 붙어서 나오는가. 'retrieval-augmented' = 'retrieval augmented'."""
+    want = tokens(phrase)
+    if not want:
+        return False
+    n = len(want)
+    return any(text_tokens[i:i + n] == want for i in range(len(text_tokens) - n + 1))
+
+
+def apply_filters(papers: list[dict], topic: Topic, since: dt.date | None = None,
+                  until: dt.date | None = None) -> list[dict]:
+    """분야·제출일·키워드·제외 키워드·중복. OAI 는 이 조건들을 서버에서 걸러 주지 않는다."""
+    wanted_cats = set(topic.categories)
     seen, kept = set(), []
-    excludes = [k.lower() for k in topic.exclude_keywords]
     for p in papers:
         if p["arxiv_id"] in seen:
             continue
         seen.add(p["arxiv_id"])
-        if topic.primary_category_only and p["primary_category"] not in topic.categories:
+        cats = [p["primary_category"]] if topic.primary_category_only else p["categories"]
+        if not wanted_cats.intersection(cats):
             continue
-        haystack = f"{p['title']} {p['abstract']}".lower()
-        if any(k in haystack for k in excludes):
+        if since and until and not (since.isoformat() <= p["published"] <= until.isoformat()):
+            continue
+        words = tokens(f"{p['title']} {p['abstract']}")
+        if topic.keywords and not any(contains_phrase(words, k) for k in topic.keywords):
+            continue
+        if any(contains_phrase(words, k) for k in topic.exclude_keywords):
             continue
         kept.append(p)
     return kept
@@ -116,11 +182,12 @@ _cache: dict[str, tuple[float, bytes]] = {}
 
 
 def reset_state() -> None:
-    """테스트용: 대기 상태와 캐시를 비운다."""
-    global _cooldown_until
+    """테스트용: 대기 상태, 응답 캐시, 분야 목록을 비운다."""
+    global _cooldown_until, _sets
     with _state_lock:
         _cooldown_until = 0.0
         _cache.clear()
+    _sets = None
 
 
 def _cooldown_remaining() -> int:
@@ -212,6 +279,7 @@ class SearchResult:
     since: dt.date
     until: dt.date
     more_available: bool   # max_papers 때문에 기간 안의 논문이 잘렸다
+    scanned: int = 0       # arXiv 에서 받아 살펴본 기록 수 (거르기 전)
 
     @property
     def oldest(self) -> str:
@@ -229,40 +297,64 @@ def date_window(topic: Topic, *, since: dt.date | None = None,
     return since, until
 
 
-def page_size_for(topic: Topic, limit: int) -> int:
-    """arXiv 에 요청할 편수. 필요한 만큼만 묻는다 (1편을 원하는데 100편을 묻지 않는다).
+_sets: list[str] | None = None
 
-    limit+1 편이면 '기간 안에 더 있는지' 까지 알 수 있다. 제외 키워드·primary 한정은
-    받은 뒤에 거르므로 여유를 둔다 — 너무 작게 물으면 페이지를 여러 번 요청하게 된다.
-    """
-    want = limit + 1
-    if topic.exclude_keywords or topic.primary_category_only:
-        want = want * 3
-    return max(1, min(PAGE_SIZE, want))
+
+def list_sets(fetch) -> list[str]:
+    """OAI-PMH 의 분야 묶음 이름 (예: cs:cs:AI, physics:quant-ph). 프로세스에서 한 번만 받는다."""
+    global _sets
+    if _sets is None:
+        root = ET.fromstring(fetch(OAI_URL + "?verb=ListSets"))
+        _sets = [(el.text or "").strip() for el in root.iter(f"{OAI}setSpec")]
+    return _sets
+
+
+def set_for_category(category: str, sets: list[str]) -> str:
+    """cs.AI → cs:cs:AI, quant-ph → physics:quant-ph, cond-mat.mtrl-sci → physics:cond-mat:mtrl-sci."""
+    suffix = category.replace(".", ":")
+    for spec in sets:
+        if spec == suffix or spec.endswith(":" + suffix):
+            return spec
+    raise ValueError(
+        f"arXiv 에 없는 분야입니다: {category!r}. 목록: https://arxiv.org/category_taxonomy")
+
+
+def harvest(set_spec: str, frm: dt.date, until: dt.date, fetch) -> list[dict]:
+    """한 분야에서 [frm, until] 에 arXiv 에 반영된 기록을 모두 받는다 (페이지 넘김 포함)."""
+    url = OAI_URL + "?" + urllib.parse.urlencode({
+        "verb": "ListRecords", "metadataPrefix": "arXivRaw", "set": set_spec,
+        "from": frm.isoformat(), "until": until.isoformat()})
+    papers: list[dict] = []
+    for _ in range(MAX_PAGES_PER_SET):
+        page, token = parse_records(fetch(url))
+        papers.extend(page)
+        if not token:
+            return papers
+        url = OAI_URL + "?" + urllib.parse.urlencode({"verb": "ListRecords", "resumptionToken": token})
+    print(f"  경고: {set_spec} 기록이 너무 많아 {MAX_PAGES_PER_SET} 페이지에서 멈췄습니다. "
+          "기간을 줄이세요.", file=sys.stderr)
+    return papers
 
 
 def search_detailed(topic: Topic, *, since: dt.date | None = None,
                     until: dt.date | None = None, today: dt.date | None = None,
-                    limit: int | None = None, fetch=_fetch) -> SearchResult:
-    """최신 제출순으로 조건에 맞는 논문을 limit 편까지 모은다."""
+                    limit: int | None = None, fetch=_fetch, log=None) -> SearchResult:
+    """기간 안에 처음 제출된, 조건에 맞는 논문을 최신순으로 limit 편까지."""
+    today = today or dt.datetime.now(dt.timezone.utc).date()
     since, until = date_window(topic, since=since, until=until, today=today)
     limit = limit or topic.max_papers
-    query = build_query(topic, since, until)
-    page_size = page_size_for(topic, limit)
+    sets = list_sets(fetch)
+    specs = list(dict.fromkeys(set_for_category(c, sets) for c in topic.categories))
+    harvest_until = min(until + dt.timedelta(days=ANNOUNCE_LAG_DAYS), today)
     collected: list[dict] = []
-    start = 0
-    while True:
-        url = API_URL + "?" + urllib.parse.urlencode({
-            "search_query": query, "start": start, "max_results": page_size,
-            "sortBy": "submittedDate", "sortOrder": "descending"})
-        page = parse_feed(fetch(url))
-        collected = apply_filters(collected + page, topic)
-        # limit 보다 1편 더 모아야 '잘렸는지' 알 수 있다
-        if len(collected) > limit or len(page) < page_size:
-            break
-        start += page_size
-    return SearchResult(papers=collected[:limit], since=since, until=until,
-                        more_available=len(collected) > limit)
+    for spec in specs:
+        if log:
+            log(f"  {spec} 기록 받는 중 ({since} ~ {harvest_until} 반영분)")
+        collected.extend(harvest(spec, since, harvest_until, fetch))
+    papers = apply_filters(collected, topic, since, until)
+    papers.sort(key=lambda p: (p["published"], p["arxiv_id"]), reverse=True)
+    return SearchResult(papers=papers[:limit], since=since, until=until,
+                        more_available=len(papers) > limit, scanned=len(collected))
 
 
 def search(topic: Topic, **kw) -> list[dict]:

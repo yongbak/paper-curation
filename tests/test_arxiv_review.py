@@ -110,7 +110,8 @@ class FeedTests(unittest.TestCase):
             if calls is not None:
                 calls.append(1)
             headers = {"Retry-After": str(retry_after)} if retry_after else {}
-            raise urllib.error.HTTPError("u", 429, "Too Many Requests", headers, io.BytesIO())
+            raise urllib.error.HTTPError("u", 429, "Too Many Requests", headers,
+                                         io.BytesIO(b"Rate exceeded."))
         return urlopen
 
     def _patched(self, urlopen, waits):
@@ -133,6 +134,7 @@ class FeedTests(unittest.TestCase):
         self.assertEqual(waits, [30, 60])      # 일반 오류(10, 20초)보다 길게 기다린다
         self.assertEqual(cm.exception.retry_after, 90)
         self.assertIn("90초 뒤", str(cm.exception))
+        self.assertIn('arXiv 응답: "Rate exceeded."', str(cm.exception))
 
     def test_retry_after_header_is_honored(self):
         waits = []

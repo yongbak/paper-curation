@@ -142,8 +142,17 @@ def _retry_after(e: urllib.error.HTTPError) -> int | None:
         return None  # HTTP 날짜 형식이거나 없음 → 기본 간격 사용
 
 
-def _limit_message(seconds: int) -> str:
-    return (f"arXiv 가 요청을 잠시 제한했습니다 (HTTP 429). {seconds}초 뒤 다시 시도하세요.\n"
+def _response_text(e: urllib.error.HTTPError) -> str:
+    """arXiv 가 오류와 함께 보낸 본문 (예: 'Rate exceeded.'). 진단용으로 앞부분만."""
+    try:
+        return " ".join(e.read(300).decode("utf-8", "replace").split())
+    except Exception:
+        return ""
+
+
+def _limit_message(seconds: int, detail: str = "") -> str:
+    said = f" arXiv 응답: \"{detail}\"" if detail else ""
+    return (f"arXiv 가 요청을 잠시 제한했습니다 (HTTP 429).{said} {seconds}초 뒤 다시 시도하세요.\n"
             "  이 컴퓨터에서 검색을 많이 하지 않았다면, 같은 네트워크(회사·기관 등)를 쓰는 "
             "다른 사용자의 요청이 함께 집계됐을 수 있습니다.")
 
@@ -175,8 +184,11 @@ def _fetch(url: str, retries: int = 3, wait_on_limit: bool = True) -> bytes:
             if isinstance(e, urllib.error.HTTPError) and e.code in (429, 503):
                 delay = min(_retry_after(e) or 30 * (attempt + 1), MAX_LIMIT_WAIT)
                 _start_cooldown(delay)
+                detail = _response_text(e)
+                print(f"  arXiv HTTP {e.code} (Retry-After: {e.headers.get('Retry-After') if e.headers else None}, "
+                      f"응답: {detail!r}) — {delay}초 동안 요청하지 않습니다", file=sys.stderr)
                 if attempt == retries - 1 or not wait_on_limit:
-                    raise RateLimited(_limit_message(delay), retry_after=delay) from e
+                    raise RateLimited(_limit_message(delay, detail), retry_after=delay) from e
                 continue  # 다음 시도 앞에서 cooldown 만큼 기다린다
             if attempt == retries - 1:
                 raise

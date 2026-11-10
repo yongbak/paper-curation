@@ -176,6 +176,14 @@ macOS python.org 설치판이면 `/Applications/Python 3.X/Install Certificates.
 **"arXiv 가 요청을 잠시 제한했습니다" (HTTP 429)**
 
 arXiv 가 이 인터넷 주소에서 오는 요청을 잠시 막은 것입니다. 안내된 시간만큼 기다린 뒤 다시 검색하세요.
+웹 화면의 `503` 은 "arXiv 가 429 를 돌려줬다" 는 것을 이 서버가 브라우저에 전하는 코드입니다.
+
+이 도구 문제인지 네트워크 문제인지는 브라우저 주소창에 아래 주소를 직접 열어 보면 알 수 있습니다.
+`Rate exceeded.` 가 보이면 이 도구와 무관하게 지금 네트워크의 인터넷 주소가 arXiv 에 제한된 상태입니다.
+
+```
+https://export.arxiv.org/api/query?search_query=cat:cs.AI&max_results=1
+```
 
 - 검색 한 번은 보통 arXiv 요청 1번입니다. 도구는 요청 사이 3초 간격을 지킵니다.
 - 제한에 걸리면 arXiv 가 알려 준 시간(`Retry-After`) 동안 이 프로그램 전체가 arXiv 에 요청하지 않습니다.

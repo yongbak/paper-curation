@@ -213,8 +213,9 @@ macOS python.org 설치판이면 `/Applications/Python 3.X/Install Certificates.
 
 **리뷰 실패: "Input must be provided either through stdin or as a prompt argument"**
 
-Windows 에서 npm 으로 설치한 Claude Code(`claude.cmd`)를 거칠 때 생기던 문제입니다. 지금은 `claude.cmd` 를
-거치지 않고 그 안의 프로그램을 직접 실행하므로 `git pull` 후 서버를 다시 시작하면 됩니다.
+한국어 Windows 에서 생기던 문제입니다. Python 이 논문 텍스트를 claude 에 넘길 때 기본 인코딩(CP949)을 써서,
+초록에 `∗` 같은 기호가 있으면 `UnicodeEncodeError` 로 넘기기가 중단됐습니다. 지금은 UTF-8 로 넘기므로
+`git pull` 후 서버를 다시 시작하면 됩니다.
 
 **"arXiv 가 요청을 잠시 제한했습니다" (HTTP 429)**
 

@@ -434,6 +434,45 @@ class RenderTests(unittest.TestCase):
         self.assertIn("<strong>정확도</strong>", page)
 
 
+class NonUtf8LocaleTests(unittest.TestCase):
+    """한국어 Windows 처럼 기본 인코딩이 UTF-8 이 아닌 Python 에서 실제 프로세스로 확인한다.
+    (LC_ALL=C + -X utf8=0 → 기본 인코딩 ASCII. CP949 처럼 '∗'(U+2217)를 표현하지 못한다.)"""
+
+    def run_child(self, code: str) -> subprocess.CompletedProcess:
+        import os
+        import sys
+        env = dict(os.environ, LC_ALL="C", LANG="C", PYTHONPATH=str(Path(__file__).parent.parent))
+        env.pop("PYTHONIOENCODING", None)
+        env.pop("PYTHONUTF8", None)
+        return subprocess.run([sys.executable, "-X", "utf8=0", "-c", code],
+                              capture_output=True, timeout=60, env=env)
+
+    def test_paper_text_reaches_claude_as_utf8(self):
+        # 사용자 기록: UnicodeEncodeError: 'cp949' codec can't encode character '\u2217'
+        # → 표준 입력을 쓰던 스레드가 죽고 claude 는 "no stdin data received" 로 실패했다.
+        proc = self.run_child(
+            "import sys\n"
+            "from unittest import mock\n"
+            "from arxiv_review import reviewer\n"
+            "echo = [sys.executable, '-c', 'import sys; sys.stdout.write(sys.stdin.buffer.read().hex())']\n"
+            "with mock.patch.object(reviewer, 'claude_program', lambda: echo[:2]):\n"
+            "    p = reviewer.run_claude([echo[2]], input='a \\u2217 b \\u2264 \\uc548', capture_output=True, timeout=30)\n"
+            "print(p.stdout)\n")
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode(errors="replace"))
+        self.assertEqual(bytes.fromhex(proc.stdout.decode().strip()).decode("utf-8"), "a ∗ b ≤ 안")
+
+    def test_cli_output_survives_a_pipe(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg = Path(d) / "config.json"
+            cfg.write_text(json.dumps({"topics": {"math": {
+                "categories": ["cs.AI"], "keywords": ["a ∗ b ≤ c"]}}}), encoding="utf-8")
+            proc = self.run_child(
+                "import sys; from arxiv_review.cli import main; "
+                f"sys.exit(main(['--config', {str(cfg)!r}, 'topic', 'list']))")
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode(errors="replace"))
+        self.assertIn("a ∗ b ≤ c", proc.stdout.decode("utf-8"))
+
+
 class AuthTests(unittest.TestCase):
     def fake(self, status_json, status_text=""):
         def run(cmd, **kw):

@@ -329,7 +329,19 @@ def _add_filter_args(p, *, topic_cmd: bool) -> None:
     p.add_argument("--max", type=int, help="최대 논문 수" + (" (기본 10)" if topic_cmd else ""))
 
 
+def _utf8_console() -> None:
+    """출력을 UTF-8 로 고정한다. Windows 에서 출력이 파이프로 가면(skill 이 search 결과를 읽을 때 등)
+    기본이 CP949 라서, 제목·초록에 '∗' 같은 기호가 있으면 UnicodeEncodeError 로 멈춘다."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError):
+                pass
+
+
 def main(argv=None) -> int:
+    _utf8_console()
     parser = argparse.ArgumentParser(
         prog="arxiv_review",
         description="arXiv 특정 카테고리·주제 검색 + Claude 구독 기반 한국어 리뷰")

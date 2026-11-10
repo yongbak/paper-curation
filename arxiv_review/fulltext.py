@@ -4,10 +4,21 @@ from __future__ import annotations
 import re
 import sys
 import urllib.request
+from dataclasses import dataclass
 
 from .arxiv import USER_AGENT
 
 _REFERENCES_RE = re.compile(r"\n\s*(references|bibliography)\s*\n", re.IGNORECASE)
+
+
+@dataclass
+class FullText:
+    text: str          # 모델에 보낼 본문 (max_chars 이하)
+    total_chars: int   # 참고문헌을 뺀 본문 전체 길이
+
+    @property
+    def truncated(self) -> bool:
+        return len(self.text) < self.total_chars
 
 
 def _pymupdf():
@@ -34,18 +45,26 @@ def strip_references(text: str) -> str:
     return text
 
 
-def fetch_fulltext(paper: dict, max_chars: int) -> str | None:
+def extract(pdf_bytes: bytes, max_chars: int) -> FullText | None:
     fitz = _pymupdf()
     if fitz is None:
+        return None
+    with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+        text = "\n".join(page.get_text() for page in doc)
+    text = strip_references(text).strip()
+    if len(text) <= 500:  # 스캔본 등 텍스트가 거의 없는 PDF
+        return None
+    return FullText(text=text[:max_chars], total_chars=len(text))
+
+
+def fetch_fulltext(paper: dict, max_chars: int) -> FullText | None:
+    if not pymupdf_available():
         return None
     try:
         req = urllib.request.Request(paper["pdf_url"], headers={"User-Agent": USER_AGENT})
         with urllib.request.urlopen(req, timeout=120) as resp:
             data = resp.read()
-        with fitz.open(stream=data, filetype="pdf") as doc:
-            text = "\n".join(page.get_text() for page in doc)
+        return extract(data, max_chars)
     except Exception as e:  # 네트워크·깨진 PDF — 초록으로 계속 진행
         print(f"  본문 추출 실패({e}) → 초록만 사용", file=sys.stderr)
         return None
-    text = strip_references(text).strip()
-    return text[:max_chars] if len(text) > 500 else None

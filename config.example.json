@@ -3,7 +3,7 @@
   "review": {
     "model": "sonnet",
     "fulltext": true,
-    "max_chars": 40000,
+    "max_chars": 120000,
     "timeout_sec": 600
   },
   "topics": {

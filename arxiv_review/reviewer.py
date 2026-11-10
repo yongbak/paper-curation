@@ -61,9 +61,17 @@ class UsageLimitError(ReviewError):
     """구독 한도 도달 — 남은 논문은 다음 실행에서 이어서 처리한다."""
 
 
-def build_prompt(paper: dict, fulltext: str | None) -> str:
-    body = (f"본문:\n{fulltext}" if fulltext
-            else "(본문 없음 — 초록만 제공됨. 초록에서 확인되는 범위로만 리뷰할 것.)")
+def build_prompt(paper: dict, fulltext=None) -> str:
+    """fulltext 는 fulltext.FullText 또는 None(초록만)."""
+    if fulltext is None:
+        body = "(본문 없음 — 초록만 제공됨. 초록에서 확인되는 범위로만 리뷰할 것.)"
+    elif fulltext.truncated:
+        body = (f"(본문은 전체 {fulltext.total_chars:,}자 중 앞 {len(fulltext.text):,}자만 "
+                "제공됨. 뒷부분에 실험·결과가 더 있을 수 있으므로, 제공되지 않은 내용을 "
+                "'본문에 없다'거나 초록과 '불일치한다'고 단정하지 말 것.)\n"
+                f"본문:\n{fulltext.text}")
+    else:
+        body = f"본문 (참고문헌 제외 전체):\n{fulltext.text}"
     return (
         "아래 논문을 리뷰하라.\n\n<paper>\n"
         f"제목: {paper['title']}\n"
@@ -111,7 +119,7 @@ def claude_command(model: str, claude_bin: str = "claude") -> list[str]:
     ]
 
 
-def review_paper(paper: dict, fulltext: str | None, *, model: str = "sonnet",
+def review_paper(paper: dict, fulltext=None, *, model: str = "sonnet",
                  timeout: int = 600, run=subprocess.run) -> dict:
     """리뷰 dict 를 돌려준다. 실패 시 ReviewError / UsageLimitError."""
     claude_bin = shutil.which("claude") or "claude"

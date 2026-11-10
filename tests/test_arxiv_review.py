@@ -7,7 +7,8 @@ import urllib.parse
 from pathlib import Path
 from types import SimpleNamespace
 
-from arxiv_review import arxiv, cli, render, reviewer
+from arxiv_review import arxiv, auth, cli, render, reviewer
+from arxiv_review.fulltext import FullText
 from arxiv_review.config import ConfigError, Topic, load_config
 
 FEED = (Path(__file__).parent / "fixtures" / "feed.xml").read_bytes()
@@ -95,7 +96,8 @@ class ReviewerTests(unittest.TestCase):
 
     def test_uses_claude_cli_without_api_key(self):
         run, calls = self.fake_run(json.dumps({"is_error": False, "structured_output": REVIEW}))
-        out = reviewer.review_paper(self.paper, "full text body", model="sonnet", run=run)
+        out = reviewer.review_paper(
+            self.paper, FullText("full text body", 14), model="sonnet", run=run)
         self.assertEqual(out["overall"], 4)
         cmd, kw = calls[0]
         self.assertEqual(cmd[1], "-p")
@@ -111,6 +113,13 @@ class ReviewerTests(unittest.TestCase):
 
     def test_abstract_only_prompt_says_so(self):
         self.assertIn("초록만 제공됨", reviewer.build_prompt(self.paper, None))
+
+    def test_truncated_body_is_announced(self):
+        whole = reviewer.build_prompt(self.paper, FullText("body", 4))
+        self.assertIn("참고문헌 제외 전체", whole)
+        cut = reviewer.build_prompt(self.paper, FullText("body", 46473))
+        self.assertIn("전체 46,473자 중 앞 4자만", cut)
+        self.assertIn("단정하지 말 것", cut)
 
     def test_usage_limit_is_distinguished(self):
         run, _ = self.fake_run(json.dumps(
@@ -157,6 +166,44 @@ class RenderTests(unittest.TestCase):
         self.assertIn("<strong>정확도</strong>", page)
 
 
+class AuthTests(unittest.TestCase):
+    def fake(self, status_json, status_text=""):
+        def run(cmd, **kw):
+            self.assertNotIn("ANTHROPIC_API_KEY", kw["env"])
+            out = json.dumps(status_json) if cmd[-1] == "--json" else status_text
+            return subprocess.CompletedProcess(cmd, 0, out, "")
+        return run
+
+    def check(self, status_json, status_text=""):
+        return auth.check(run=self.fake(status_json, status_text),
+                          which=lambda name: "/bin/claude")
+
+    def test_not_installed(self):
+        status = auth.check(which=lambda name: None)
+        self.assertIn("npm install", status.problem())
+
+    def test_logged_out(self):
+        status = self.check({"loggedIn": False})
+        self.assertFalse(status.logged_in)
+        self.assertIn("arxiv_review login", status.problem())
+
+    def test_pro_subscription_by_login_method(self):
+        status = self.check({"loggedIn": True, "authMethod": "claude.ai"},
+                            "Login method: Claude Pro Account\nOrganization: x\n")
+        self.assertEqual(status.method, "Claude Pro Account")
+        self.assertIsNone(status.problem())
+
+    def test_subscription_type_field(self):
+        status = self.check({"loggedIn": True, "subscriptionType": "pro"}, "")
+        self.assertIsNone(status.problem())
+
+    def test_api_account_is_refused(self):
+        status = self.check({"loggedIn": True, "authMethod": "oauth_token"},
+                            "Login method: Claude API account\n")
+        self.assertIn("구독으로 확인되지 않습니다", status.problem())
+        self.assertIn("Claude API account", status.problem())
+
+
 class CliTests(unittest.TestCase):
     def args(self, **kw):
         base = dict(topic=None, category=None, keyword=None, exclude=None,
@@ -183,6 +230,39 @@ class CliTests(unittest.TestCase):
             cli.resolve_topic(self.args(topic="missing"), config)
         with self.assertRaises(ConfigError):
             cli.resolve_topic(self.args(), config)
+
+    def test_topic_add_list_remove(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = str(Path(d) / "config.json")
+            base = ["--config", path, "topic"]
+            self.assertEqual(cli.main(base + [
+                "add", "rag", "--category", "cs.CL", "--category", "cs.IR",
+                "--keyword", "retrieval augmented generation", "--days", "3"]), 0)
+            t = load_config(path).topics["rag"]
+            self.assertEqual((t.categories, t.keywords, t.days, t.max_papers),
+                             (["cs.CL", "cs.IR"], ["retrieval augmented generation"], 3, 10))
+            # 같은 이름으로 다시 add 하면 준 값만 바뀐다
+            self.assertEqual(cli.main(base + ["add", "rag", "--max", "5"]), 2)  # category 필수
+            self.assertEqual(cli.main(base + ["add", "rag", "--category", "cs.CL", "--max", "5"]), 0)
+            t = load_config(path).topics["rag"]
+            self.assertEqual((t.categories, t.days, t.max_papers), (["cs.CL"], 3, 5))
+            self.assertEqual(cli.main(base + ["add", "bad name", "--category", "cs.CL"]), 2)
+            self.assertEqual(cli.main(base + ["remove", "rag"]), 0)
+            self.assertEqual(load_config(path).topics, {})
+            self.assertEqual(cli.main(base + ["remove", "rag"]), 2)
+
+    def test_run_stops_before_review_without_subscription(self):
+        original = auth.check
+        auth.check = lambda: auth.LoginStatus(installed=True, logged_in=False)
+        searched = []
+        original_search = arxiv.search
+        arxiv.search = lambda *a, **k: searched.append(1) or []
+        try:
+            code = cli.main(["--config", "/nonexistent.json", "run", "--category", "cs.CL"])
+        finally:
+            auth.check, arxiv.search = original, original_search
+        self.assertEqual(code, 2)
+        self.assertEqual(searched, [])
 
     def test_example_config_is_valid(self):
         config = load_config(Path(__file__).parent.parent / "config.example.json")

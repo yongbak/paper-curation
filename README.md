@@ -1,81 +1,130 @@
 # arxiv-review
 
 arXiv 의 **특정 카테고리 + 특정 주제**만 검색해서, 각 논문의 **한국어 리뷰**를 만들고
-검색 가능한 HTML 한 장으로 보여 주는 작은 도구입니다.
+검색 가능한 HTML 한 장으로 보여 주는 도구입니다.
 
-리뷰 생성은 Anthropic API 키가 아니라 **Claude Code CLI(`claude -p`)** 를 호출합니다.
-`claude` 가 Pro/Max 구독 계정으로 로그인돼 있으면 사용량은 구독 한도에서 차감되고
-API 요금은 발생하지 않습니다.
+리뷰는 Anthropic API 키가 아니라 **Claude Code CLI(`claude`)** 로 만듭니다.
+`claude` 에 **Claude Pro 구독 계정**으로 로그인해 두면 사용량이 구독 한도에서 차감되고
+API 요금은 나가지 않습니다.
 
-## 준비
+아래 1~4단계를 순서대로 하면 됩니다.
 
-1. Python 3.10 이상
-2. [Claude Code](https://claude.com/claude-code) 설치 후 터미널에서 `claude` 실행 → `/login` 으로 Pro 구독 계정 로그인
-3. (선택) `pip install -r requirements.txt` — PyMuPDF 를 설치하면 초록이 아니라 **PDF 본문 전체**로 리뷰합니다
+---
 
-```bash
-cp config.example.json config.json   # 토픽을 내 관심사로 수정
-```
+## 1단계. 설치 (최초 1회)
 
-## 사용
+필요한 것: Python 3.10 이상, Node.js 18 이상
 
 ```bash
-# config.json 의 토픽으로 검색 + 리뷰 + HTML
-python -m arxiv_review run --topic llm-agents
-
-# 검색 결과만 미리 보기 (리뷰 없음, 구독 사용량 0)
-python -m arxiv_review run --topic llm-agents --dry-run
-
-# config 없이 즉석 검색
-python -m arxiv_review run --category cs.CV --keyword "diffusion model" --days 3 --max 5
-
-# 저장된 리뷰로 HTML 만 다시 생성
-python -m arxiv_review build --topic llm-agents
+git clone https://github.com/yongbak/paper-curation.git
+cd paper-curation
+pip install -r requirements.txt          # PDF 본문 리뷰용 PyMuPDF
+npm install -g @anthropic-ai/claude-code # Claude Code CLI
 ```
 
-결과는 `output/<토픽>/` 에 쌓입니다.
+이후 모든 명령은 `paper-curation` 폴더 안에서 실행합니다.
+
+## 2단계. Claude Pro 계정으로 로그인 (최초 1회)
+
+```bash
+python -m arxiv_review login
+```
+
+1. 브라우저가 열리면 **Claude Pro 구독 계정**으로 로그인하고 승인합니다.
+   (브라우저가 안 열리면 터미널에 나온 주소를 직접 열고, 받은 코드를 터미널에 붙여 넣습니다.)
+2. 끝나면 로그인 방식이 자동으로 표시됩니다. 언제든 다시 확인하려면:
+
+```bash
+python -m arxiv_review status
+```
+
+| 표시 | 의미 |
+|---|---|
+| `Login method:` 에 Claude Pro 계정이 표시되고 "구독 계정으로 로그인돼 있습니다" | 정상. 리뷰가 구독 사용량으로 처리됩니다 |
+| "구독으로 확인되지 않습니다" (예: `Claude API account`) | API 과금 계정입니다. `claude auth logout` 후 다시 `login` 하세요 |
+| "로그인돼 있지 않습니다" | `python -m arxiv_review login` 을 실행하세요 |
+
+리뷰를 시작하기 전에 도구가 이 확인을 자동으로 하고, 구독 로그인이 아니면 **리뷰를 시작하지 않습니다**.
+환경변수 `ANTHROPIC_API_KEY` 가 설정돼 있어도 리뷰 호출에서는 지우므로 API 과금으로 넘어가지 않습니다.
+
+## 3단계. 검색 주제 입력
+
+**`topic add` 명령으로 등록합니다.** 등록한 내용은 `config.json` 파일에 저장됩니다.
+
+```bash
+python -m arxiv_review topic add rag \
+  --category cs.CL --category cs.IR \
+  --keyword "retrieval augmented generation" --keyword "RAG" \
+  --exclude survey \
+  --days 7 --max 10
+```
+
+| 입력 | 뜻 | 예 |
+|---|---|---|
+| `rag` (첫 단어) | 주제 이름. 영문·숫자·`-`·`_`. 결과 폴더 이름이 됩니다 | `rag`, `llm-agents` |
+| `--category` | 검색할 arXiv 카테고리. 여러 번 쓰면 OR · [카테고리 목록](https://arxiv.org/category_taxonomy) | `cs.CL`, `cs.CV`, `q-bio.BM` |
+| `--keyword` | **찾을 주제**. 제목·초록에서 구문으로 찾습니다. 여러 번 쓰면 OR. 생략하면 카테고리 전체 | `"diffusion model"` |
+| `--exclude` | 제목·초록에 있으면 뺄 단어 | `survey` |
+| `--primary-only` | 다른 분야 논문이 cross-list 로 섞이는 것을 막고 primary 카테고리만 | |
+| `--days` / `--max` | 최근 N일 제출분 중 최신순 최대 M편 (기본 7일, 10편) | `--days 3 --max 5` |
+
+검색 조건은 **(카테고리 중 하나) AND (키워드 중 하나) AND (최근 N일)** 입니다.
+같은 이름으로 다시 `topic add` 하면 준 값만 바뀝니다 (`--category` 는 매번 필요).
+
+```bash
+python -m arxiv_review topic list          # 등록된 주제 보기
+python -m arxiv_review topic remove rag    # 주제 삭제 (만든 리뷰는 남음)
+```
+
+`config.json` 을 직접 편집해도 됩니다. 형식은 `config.example.json` 을 참고하세요.
+
+## 4단계. 실행
+
+```bash
+python -m arxiv_review run --topic rag --dry-run   # ① 검색 결과만 확인 (구독 사용량 0)
+python -m arxiv_review run --topic rag             # ② 검색 + 한국어 리뷰 + HTML
+```
+
+①로 원하는 논문이 잡히는지 보고 키워드를 조정한 뒤 ②를 실행하세요.
+결과는 `output/rag/index.html` 을 브라우저로 열면 됩니다.
 
 | 파일 | 내용 |
 |---|---|
-| `index.html` | 토픽의 모든 리뷰 — 검색창, 카드, 펼쳐 보는 전체 리뷰 |
-| `<arxiv_id>/review.md` | 논문별 한국어 리뷰 (마크다운) |
-| `<arxiv_id>/paper.json` | 메타데이터 + 리뷰 원본 (이 파일이 있으면 재실행 때 건너뜀) |
+| `output/<주제>/index.html` | 그 주제의 모든 리뷰. 검색창, 카드, 펼쳐 보는 전체 리뷰 |
+| `output/<주제>/<arxiv_id>/review.md` | 논문별 한국어 리뷰 (마크다운) |
+| `output/<주제>/<arxiv_id>/paper.json` | 메타데이터 + 리뷰 원본. 이 파일이 있으면 재실행 때 건너뜀 |
 
-## 토픽 설정
+등록 없이 한 번만 검색할 수도 있습니다 (결과는 `output/adhoc/`).
 
-```json
-"llm-agents": {
-  "categories": ["cs.CL", "cs.AI"],
-  "keywords": ["LLM agent", "tool use"],
-  "exclude_keywords": ["survey"],
-  "primary_category_only": false,
-  "days": 7,
-  "max_papers": 10
-}
+```bash
+python -m arxiv_review run --category cs.CV --keyword "diffusion model" --days 3 --max 5
 ```
 
-| 키 | 의미 |
-|---|---|
-| `categories` | arXiv 카테고리. 여러 개면 OR ([목록](https://arxiv.org/category_taxonomy)) |
-| `keywords` | 주제. 제목·초록의 **구문 검색**, 여러 개면 OR. 비우면 카테고리 전체 |
-| `exclude_keywords` | 제목·초록에 있으면 제외 |
-| `primary_category_only` | cross-list 를 빼고 primary 카테고리가 일치하는 논문만 |
-| `days` / `max_papers` | 최근 N일 제출분 중 최신순 최대 M편 |
+그 밖의 옵션: `--force` 이미 리뷰한 논문도 다시, `--no-fulltext` 초록만으로 리뷰,
+`--model opus` 모델 변경, `build --topic rag` 저장된 리뷰로 HTML 만 다시 생성.
 
-검색식은 `(카테고리들) AND (키워드들) AND 제출일 범위` 입니다.
+---
 
-## 구독 사용량에 관해
+## 리뷰는 무엇을 읽고 무엇을 쓰나
 
-- 논문 1편 = `claude -p` 호출 1회입니다. 한 번에 한 편씩 순차 처리합니다.
-- 기본 모델은 `sonnet` 입니다 (`review.model` 또는 `--model` 로 변경).
-- 이미 리뷰한 논문은 건너뛰므로 재실행은 새 논문에만 사용량을 씁니다 (`--force` 로 다시 리뷰).
-- 구독 한도에 걸리면 그 자리에서 멈추고, 한도가 풀린 뒤 같은 명령을 다시 실행하면 이어집니다.
-- 환경변수 `ANTHROPIC_API_KEY` 가 있어도 리뷰 호출에서는 제거하므로 API 과금으로 넘어가지 않습니다.
+- **입력**: arXiv PDF 를 받아 참고문헌을 뺀 본문을 최대 120,000자까지 읽습니다.
+  대부분의 논문은 전체가 들어갑니다. 더 길면 앞부분만 읽고, 그 사실을 모델에게 알려
+  읽지 않은 부분을 "없다"고 단정하지 않게 합니다. 리뷰 머리말의 **리뷰 근거**에
+  본문 전체인지, 일부인지, 초록만인지 표시됩니다.
+- **출력**: Essence · 알려진 것 · 연구 갭 · 왜 중요한가 · 접근법 · 성과 · 방법론 ·
+  독창성 · 한계와 후속 연구 · 평가(5개 항목 1~5점) · 총평.
+  서술은 한국어, 기술 용어는 원문 그대로 둡니다.
+- **방식**: 원문 문장을 그대로 뽑는 발췌가 아니라, Claude 가 읽고 한국어로 정리한 요약·분석입니다.
+  제공된 텍스트에 없는 수치는 쓰지 않도록 지시합니다.
 
-## 리뷰 형식
+## 구독 사용량
 
-Essence · 알려진 것 · 연구 갭 · 왜 중요한가 · 접근법 · 성과 · 방법론 · 독창성 ·
-한계와 후속 연구 · 평가(5개 항목 1~5점) · 총평. 서술은 한국어, 기술 용어는 원문 그대로 둡니다.
+- 논문 1편 = `claude` 호출 1회 (본문 기준 대략 수만 토큰). 한 편씩 순차 처리합니다.
+- 기본 모델은 `sonnet` 입니다. Pro 구독의 사용 한도는 claude.ai 채팅과 함께 씁니다.
+  처음에는 `--max 3` 정도로 시작하세요.
+- 이미 리뷰한 논문은 건너뛰므로 재실행은 새 논문에만 사용량을 씁니다.
+- 한도에 걸리면 그 자리에서 멈춥니다. 한도가 풀린 뒤 같은 명령을 다시 실행하면 이어집니다.
+- 사용량을 더 줄이려면 `config.json` 의 `review.max_chars` 를 낮추거나 `--no-fulltext` 를 쓰세요.
 
 ## 테스트
 

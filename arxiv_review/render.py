@@ -26,8 +26,16 @@ def paper_dirname(arxiv_id: str) -> str:
     return arxiv_id.replace("/", "_")
 
 
+def basis_label(meta: dict) -> str:
+    if meta.get("basis") != "fulltext":
+        return "초록"
+    sent, total = meta.get("fulltext_chars"), meta.get("fulltext_total_chars")
+    if sent and total and sent < total:
+        return f"본문 앞 {sent:,}자 (전체 {total:,}자 중 {sent * 100 // total}%)"
+    return "본문 전체 (참고문헌 제외)"
+
+
 def review_markdown(paper: dict, review: dict, meta: dict) -> str:
-    basis = "본문 전체" if meta.get("basis") == "fulltext" else "초록"
     lines = [
         "---",
         f"title: {json.dumps(paper['title'], ensure_ascii=False)}",
@@ -44,7 +52,7 @@ def review_markdown(paper: dict, review: dict, meta: dict) -> str:
         f"> **저자**: {', '.join(paper['authors'])}  ",
         f"> **arXiv**: [{paper['arxiv_id']}]({paper['abs_url']}) · "
         f"{' · '.join(paper['categories'])} · {paper['published']}  ",
-        f"> **리뷰 근거**: {basis}",
+        f"> **리뷰 근거**: {basis_label(meta)}",
         "",
     ]
     for key, label in SECTIONS:
@@ -150,7 +158,8 @@ def _article(entry: dict) -> str:
     p, r, m = entry["paper"], entry["review"], entry.get("meta", {})
     e = html.escape
     authors = ", ".join(p["authors"][:6]) + (" 외" if len(p["authors"]) > 6 else "")
-    basis = "본문" if m.get("basis") == "fulltext" else "초록"
+    basis = ("본문 일부" if m.get("fulltext_chars", 0) < m.get("fulltext_total_chars", 0)
+             else "본문") if m.get("basis") == "fulltext" else "초록"
     search_text = " ".join([p["title"], " ".join(p["authors"]), p["abstract"],
                             *(r[k] for k, _ in SECTIONS), r["verdict"]]).lower()
     body = "".join(f"<h3>{e(label)}</h3>\n{md_to_html(r[key])}\n"

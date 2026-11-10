@@ -45,7 +45,7 @@ class Topic:
 class ReviewSettings:
     model: str = "sonnet"
     fulltext: bool = True
-    max_chars: int = 40000
+    max_chars: int = 120000
     timeout_sec: int = 600
 
 
@@ -98,10 +98,54 @@ def load_config(path: str | Path | None) -> Config:
     review = ReviewSettings(
         model=str(r.get("model", "sonnet")),
         fulltext=bool(r.get("fulltext", True)),
-        max_chars=int(r.get("max_chars", 40000)),
+        max_chars=int(r.get("max_chars", 120000)),
         timeout_sec=int(r.get("timeout_sec", 600)),
     )
     out = Path(raw.get("output_dir", "output"))
     if not out.is_absolute():
         out = base / out
     return Config(topics=topics, review=review, output_dir=out)
+
+
+def topic_to_dict(topic: Topic) -> dict:
+    return {
+        "categories": topic.categories,
+        "keywords": topic.keywords,
+        "exclude_keywords": topic.exclude_keywords,
+        "primary_category_only": topic.primary_category_only,
+        "days": topic.days,
+        "max_papers": topic.max_papers,
+    }
+
+
+def _read_raw(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise ConfigError(f"{path}: JSON 오류 — {e}") from e
+
+
+def _write_raw(path: Path, raw: dict) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
+def save_topic(path: str | Path, topic: Topic) -> None:
+    """config.json 에 토픽을 추가/교체한다. 파일이 없으면 만든다. 다른 설정은 보존."""
+    path = Path(path)
+    raw = _read_raw(path)
+    raw.setdefault("topics", {})[topic.validate().name] = topic_to_dict(topic)
+    _write_raw(path, raw)
+
+
+def delete_topic(path: str | Path, name: str) -> bool:
+    path = Path(path)
+    raw = _read_raw(path)
+    if name not in (raw.get("topics") or {}):
+        return False
+    del raw["topics"][name]
+    _write_raw(path, raw)
+    return True
